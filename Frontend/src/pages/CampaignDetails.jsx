@@ -36,6 +36,7 @@ const CampaignDetails = () => {
   const [totalRegsCount, setTotalRegsCount] = useState(0);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [diseaseFilter, setDiseaseFilter] = useState('');
   const [regLoading, setRegLoading] = useState(false);
 
   // Modal participant drawer
@@ -68,12 +69,16 @@ const CampaignDetails = () => {
     const fetchRegistrations = async () => {
       setRegLoading(true);
       try {
-        const query = new URLSearchParams({
+        const queryParams = {
           page,
           limit,
           search,
           status: statusFilter
-        }).toString();
+        };
+        if (diseaseFilter) {
+          queryParams.disease = diseaseFilter;
+        }
+        const query = new URLSearchParams(queryParams).toString();
         const data = await api.get(`/registrations/campaign/${id}?${query}`);
         setRegistrations(data.registrations || []);
         // Backend returns pagination inside a nested object with snake_case keys
@@ -88,7 +93,7 @@ const CampaignDetails = () => {
     if (campaign) {
       fetchRegistrations();
     }
-  }, [id, campaign, page, limit, search, statusFilter]);
+  }, [id, campaign, page, limit, search, statusFilter, diseaseFilter]);
 
   const handleUpdateStatus = async (regId, newStatus) => {
     try {
@@ -272,6 +277,41 @@ const CampaignDetails = () => {
 
   const campaignPublicUrl = `${window.location.origin}/campaign/${id}`;
 
+  // ── Disease field auto-detection ──────────────────────────────────────────
+  // Any field whose label contains the word 'disease' (case-insensitive) is
+  // treated as a "Disease" field: it gets its own table column and a filter.
+  const diseaseField = fields.find(f => /disease/i.test(f.label));
+
+  // Populate disease dropdown from the field's DEFINED OPTIONS first
+  // (so all configured choices show even if no one has submitted that value yet).
+  // Then append any custom "Other" values that users actually typed.
+  const uniqueDiseaseValues = (() => {
+    if (!diseaseField) return [];
+
+    // 1. Start with the admin-defined options (parsed from field schema)
+    const definedOptions = Array.isArray(diseaseField.options)
+      ? diseaseField.options.filter(o => o && o !== 'Other')
+      : [];
+
+    // 2. Collect custom "Other" values from actual submissions
+    const submittedCustom = registrations.flatMap(r => {
+      const val = r.submitted_data?.[diseaseField.field_name];
+      const vals = Array.isArray(val) ? val : (val ? [String(val)] : []);
+      return vals.filter(v => v && !definedOptions.includes(v) && v !== 'Other');
+    });
+
+    return [...new Set([...definedOptions, ...submittedCustom])].sort();
+  })();
+
+
+  // Fields shown in the normal columns (skip the disease field to avoid duplication)
+  const normalFields = fields
+    .filter(f => !diseaseField || f.field_name !== diseaseField.field_name)
+    .slice(0, 3);
+
+  // All filtration is handled by the backend
+  const filteredRegistrations = registrations;
+
   return (
     <div className="flex-1 p-6 space-y-6 max-w-7xl mx-auto w-full overflow-y-auto">
       
@@ -406,8 +446,8 @@ const CampaignDetails = () => {
         {/* Section Header with Exports */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
           <div className="flex items-center space-x-2.5">
-            <h3 className="font-bold text-slate-800 text-sm">Registrations Dashboard</h3>
-            <span className="text-[10px] font-bold px-2 py-0.5 bg-violet-50 text-violet-600 rounded-full">
+            <h3 className="font-bold text-slate-800 text-base">Registrations Dashboard</h3>
+            <span className="text-xs font-bold px-2.5 py-1 bg-violet-50 text-violet-600 rounded-full">
               {totalRegsCount} Submissions
             </span>
           </div>
@@ -425,30 +465,51 @@ const CampaignDetails = () => {
           
           {/* Search box */}
           <div className="relative w-80 max-w-full">
-            <Search className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-400" />
+            <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-400" />
             <input
               type="text"
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1); }}
               placeholder="Search by participant details..."
-              className="w-full text-xs pl-9.5 pr-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-800 focus:outline-none focus:border-violet-500 focus:bg-white transition"
+              className="w-full text-sm pl-9.5 pr-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-800 focus:outline-none focus:border-violet-500 focus:bg-white transition"
             />
           </div>
 
-          {/* Status filters */}
-          <div className="flex items-center space-x-2 shrink-0">
-            <span className="text-xs text-slate-400 font-semibold">Status:</span>
-            <select
-              value={statusFilter}
-              onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
-              className="text-xs px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 focus:outline-none focus:border-violet-500 transition"
-            >
-              <option value="">All Statuses</option>
-              <option value="Pending">Pending</option>
-              <option value="Verified">Verified</option>
-              <option value="Approved">Approved</option>
-              <option value="Rejected">Rejected</option>
-            </select>
+          <div className="flex items-center gap-3 shrink-0 flex-wrap">
+            {/* Status filter */}
+            <div className="flex items-center space-x-2">
+              <span className="text-sm text-slate-400 font-semibold">Status:</span>
+              <select
+                value={statusFilter}
+                onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+                className="text-sm px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 focus:outline-none focus:border-violet-500 transition"
+              >
+                <option value="">All Statuses</option>
+                <option value="Pending">Pending</option>
+                <option value="Verified">Verified</option>
+                <option value="Approved">Approved</option>
+                <option value="Rejected">Rejected</option>
+              </select>
+            </div>
+
+            {/* Disease filter — only visible when a Disease field exists */}
+            {diseaseField && uniqueDiseaseValues.length > 0 && (
+              <div className="flex items-center space-x-2">
+                <span className="text-sm text-rose-500 font-semibold flex items-center gap-1">
+                  {diseaseField.label}:
+                </span>
+                <select
+                  value={diseaseFilter}
+                  onChange={(e) => { setDiseaseFilter(e.target.value); setPage(1); }}
+                  className="text-sm px-3 py-2 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 focus:outline-none focus:border-rose-400 transition"
+                >
+                  <option value="">All</option>
+                  {uniqueDiseaseValues.map(v => (
+                    <option key={v} value={v}>{v}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         </div>
 
@@ -458,10 +519,10 @@ const CampaignDetails = () => {
             <div className="w-10 h-10 border-4 border-violet-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
             <span>Loading registrations data...</span>
           </div>
-        ) : registrations.length === 0 ? (
+        ) : filteredRegistrations.length === 0 ? (
           <div className="py-16 text-center text-slate-400 text-xs flex flex-col items-center">
             <Inbox className="h-10 w-10 mb-2 stroke-1" />
-            <span>No registrations matches filters.</span>
+            <span>No registrations match the current filters.</span>
           </div>
         ) : (
           <div className="relative border border-white/20 rounded-2xl overflow-hidden">
@@ -472,40 +533,45 @@ const CampaignDetails = () => {
             )}
             
             <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
+              <table className="w-full text-left border-collapse text-sm">
                 <thead>
-                  <tr className="bg-slate-50/50 border-b border-slate-150 text-slate-500 font-semibold uppercase tracking-wider text-[10px]">
+                  <tr className="bg-slate-50/50 border-b border-slate-150 text-slate-500 font-semibold uppercase tracking-wider text-xs">
                     <th className="py-4 px-4 font-bold">Registration ID</th>
                     <th className="py-4 px-4 font-bold">Date</th>
-                    
-                    {/* Dynamic field columns (showing first 4 fields to avoid table bloating) */}
-                    {fields.slice(0, 4).map(f => (
+
+                    {/* First 3 normal fields (disease field excluded to avoid duplication) */}
+                    {normalFields.map(f => (
                       <th key={f.field_name} className="py-4 px-4 font-bold truncate max-w-[130px]">{f.label}</th>
                     ))}
+
+                    {/* Auto Disease column — only when a disease field exists */}
+                    {diseaseField && (
+                      <th className="py-4 px-4 font-bold">
+                        <span className="flex items-center gap-1">
+                          {diseaseField.label}
+                        </span>
+                      </th>
+                    )}
 
                     <th className="py-4 px-4 font-bold">Status</th>
                     <th className="py-4 px-4 font-bold text-center">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {registrations.map(r => (
-                    <tr key={r.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="py-4 px-4 font-mono font-bold text-slate-700">{r.registration_id}</td>
-                      <td className="py-4 px-4 text-slate-400 font-semibold">{new Date(r.created_at).toLocaleDateString()}</td>
+                  {filteredRegistrations.map(r => (
+                    <tr key={r.id} className="hover:bg-slate-50/50 transition-colors text-sm">
+                      <td className="py-4 px-4 font-mono font-bold text-slate-700 text-xs">{r.registration_id}</td>
+                      <td className="py-4 px-4 text-slate-400 font-semibold text-xs">{new Date(r.created_at).toLocaleDateString()}</td>
 
-                      {/* Dynamic field values */}
-                      {fields.slice(0, 4).map(f => {
+                      {/* Normal field values */}
+                      {normalFields.map(f => {
                         const value = r.submitted_data[f.field_name];
                         let formatted = '-';
-                        
                         if (value !== undefined && value !== null) {
-                          if (typeof value === 'object') {
-                            formatted = '[Uploaded File]';
-                          } else {
-                            formatted = String(value);
-                          }
+                          if (Array.isArray(value)) formatted = value.join(', ');
+                          else if (typeof value === 'object') formatted = '[Uploaded File]';
+                          else formatted = String(value);
                         }
-                        
                         return (
                           <td key={f.field_name} className="py-4 px-4 text-slate-600 font-medium truncate max-w-[130px]" title={formatted}>
                             {formatted}
@@ -513,12 +579,32 @@ const CampaignDetails = () => {
                         );
                       })}
 
+                      {/* Disease column value — styled with a rose pill */}
+                      {diseaseField && (() => {
+                        const val = r.submitted_data?.[diseaseField.field_name];
+                        const displayVals = Array.isArray(val) ? val : (val ? [String(val)] : []);
+                        return (
+                          <td className="py-4 px-4">
+                            <div className="flex flex-wrap gap-1">
+                              {displayVals.length > 0
+                                ? displayVals.map((v, i) => (
+                                    <span key={i} className="inline-block text-[11px] font-bold px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-200">
+                                      {v}
+                                    </span>
+                                  ))
+                                : <span className="text-slate-300">—</span>
+                              }
+                            </div>
+                          </td>
+                        );
+                      })()}
+
                       {/* Status Badge Select dropdown */}
                       <td className="py-4 px-4">
                         <select
                           value={r.status}
                           onChange={(e) => handleUpdateStatus(r.id, e.target.value)}
-                          className={`text-[10px] font-extrabold px-2.5 py-1 rounded-lg border border-transparent focus:outline-none transition ${
+                          className={`text-xs font-extrabold px-2.5 py-1 rounded-lg border border-transparent focus:outline-none transition ${
                             r.status === 'Approved' || r.status === 'Verified'
                               ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
                               : r.status === 'Rejected'
@@ -537,7 +623,7 @@ const CampaignDetails = () => {
                       <td className="py-4 px-4 text-center">
                         <button
                           onClick={() => openParticipantDetails(r.id)}
-                          className="text-[11px] font-extrabold text-violet-600 hover:text-white bg-violet-50 hover:bg-violet-600 px-3 py-1.5 rounded-xl transition duration-150"
+                          className="text-xs font-extrabold text-violet-600 hover:text-white bg-violet-50 hover:bg-violet-600 px-3 py-1.5 rounded-xl transition duration-150"
                         >
                           Open Profile
                         </button>
@@ -552,7 +638,7 @@ const CampaignDetails = () => {
 
         {/* PAGINATION CONTROLS */}
         {totalPages > 1 && (
-          <div className="flex items-center justify-between border-t border-slate-100 pt-4 text-xs font-semibold text-slate-405">
+          <div className="flex items-center justify-between border-t border-slate-100 pt-4 text-sm font-semibold text-slate-405">
             <span>Showing page {page} of {totalPages}</span>
             <div className="flex items-center space-x-2">
               <button

@@ -220,15 +220,20 @@ const ParticipantSubmit = () => {
     }
   };
 
-  // Multi choice change
+  // Multi choice change (handles checkbox / multi-select including "Other" option)
   const handleChoiceChange = (fieldName, val, isChecked, isMultiple = false) => {
     if (isMultiple) {
       const current = Array.isArray(formValues[fieldName]) ? [...formValues[fieldName]] : [];
       if (isChecked) {
-        current.push(val);
+        if (!current.includes(val)) current.push(val);
       } else {
         const index = current.indexOf(val);
         if (index > -1) current.splice(index, 1);
+        // Clear the "Other" text when Other is unchecked
+        if (val === 'Other') {
+          setFormValues(prev => ({ ...prev, [fieldName]: current, [`__other_${fieldName}`]: '' }));
+          return;
+        }
       }
       setFormValues(prev => ({ ...prev, [fieldName]: current }));
     } else {
@@ -250,6 +255,13 @@ const ParticipantSubmit = () => {
       if (f.is_required && (val === undefined || val === null || val === '' || (Array.isArray(val) && val.length === 0))) {
         errors[f.field_name] = `"${f.label}" is required.`;
       }
+      // Validate that "Other" text is filled when ticked
+      if (Array.isArray(val) && val.includes('Other')) {
+        const otherText = (formValues[`__other_${f.field_name}`] || '').trim();
+        if (!otherText) {
+          errors[f.field_name] = `Please specify the "Other" value for "${f.label}".`;
+        }
+      }
     });
 
     if (Object.keys(errors).length > 0) {
@@ -259,10 +271,23 @@ const ParticipantSubmit = () => {
       return;
     }
 
+    // Build clean submitted_data: replace "Other" in arrays with typed text,
+    // and strip __other_ helper keys from the payload
+    const cleanData = {};
+    Object.entries(formValues).forEach(([key, val]) => {
+      if (key.startsWith('__other_')) return; // skip helper keys
+      if (Array.isArray(val) && val.includes('Other')) {
+        const otherText = (formValues[`__other_${key}`] || '').trim();
+        cleanData[key] = val.map(v => (v === 'Other' ? otherText : v));
+      } else {
+        cleanData[key] = val;
+      }
+    });
+
     try {
       const res = await api.post('/registrations', {
         campaign_id: id,
-        submitted_data: formValues
+        submitted_data: cleanData
       });
 
       setGeneratedRegId(res.registration_id);
@@ -275,6 +300,7 @@ const ParticipantSubmit = () => {
       setSubmitLoading(false);
     }
   };
+
 
   if (loading) {
     return (
@@ -537,35 +563,65 @@ const ParticipantSubmit = () => {
 
                   {/* 9. Checkbox */}
                   {f.field_type === 'Checkbox' && (
-                    <div className="flex flex-wrap gap-4 pt-1">
-                      {f.options?.map((opt, oi) => (
-                        <label key={oi} className="flex items-center space-x-2 text-xs text-slate-600 cursor-pointer">
+                    <div className="space-y-3 pt-1">
+                      <div className="flex flex-wrap gap-4">
+                        {f.options?.map((opt, oi) => (
+                          <label key={oi} className="flex items-center space-x-2 text-xs text-slate-600 cursor-pointer group">
+                            <input
+                              type="checkbox"
+                              checked={Array.isArray(value) && value.includes(opt)}
+                              onChange={(e) => handleChoiceChange(f.field_name, opt, e.target.checked, true)}
+                              className="rounded text-violet-600 focus:ring-violet-500"
+                            />
+                            <span className="group-hover:text-violet-700 transition">{opt}</span>
+                          </label>
+                        ))}
+                      </div>
+                      {/* "Other" free-text input — revealed only when Other is ticked */}
+                      {Array.isArray(value) && value.includes('Other') && (
+                        <div className="flex items-center gap-2 pl-1 animate-in fade-in slide-in-from-top-1 duration-200">
+                          <div className="w-0.5 h-8 bg-violet-300 rounded-full shrink-0" />
                           <input
-                            type="checkbox"
-                            checked={Array.isArray(value) && value.includes(opt)}
-                            onChange={(e) => handleChoiceChange(f.field_name, opt, e.target.checked, true)}
-                            className="rounded text-violet-600 focus:ring-violet-500"
+                            type="text"
+                            value={formValues[`__other_${f.field_name}`] || ''}
+                            onChange={(e) => setFormValues(prev => ({ ...prev, [`__other_${f.field_name}`]: e.target.value }))}
+                            placeholder="Please specify..."
+                            className="flex-1 text-xs px-3 py-2 rounded-xl bg-violet-50 border border-violet-200 text-slate-800 placeholder-violet-300 focus:outline-none focus:border-violet-500 focus:bg-white transition"
                           />
-                          <span>{opt}</span>
-                        </label>
-                      ))}
+                        </div>
+                      )}
                     </div>
                   )}
 
                   {/* 10. Multi Select */}
                   {f.field_type === 'Multi Select' && (
-                    <div className="border border-white/30 rounded-xl p-3.5 space-y-2.5 bg-white/40 max-h-40 overflow-y-auto">
-                      {f.options?.map((opt, oi) => (
-                        <label key={oi} className="flex items-center space-x-2 text-xs text-slate-600 cursor-pointer">
+                    <div className="space-y-3">
+                      <div className="border border-white/30 rounded-xl p-3.5 space-y-2.5 bg-white/40 max-h-40 overflow-y-auto">
+                        {f.options?.map((opt, oi) => (
+                          <label key={oi} className="flex items-center space-x-2 text-xs text-slate-600 cursor-pointer group">
+                            <input
+                              type="checkbox"
+                              checked={Array.isArray(value) && value.includes(opt)}
+                              onChange={(e) => handleChoiceChange(f.field_name, opt, e.target.checked, true)}
+                              className="rounded text-violet-600 focus:ring-violet-500"
+                            />
+                            <span className="group-hover:text-violet-700 transition">{opt}</span>
+                          </label>
+                        ))}
+                      </div>
+                      {/* "Other" free-text input for Multi Select */}
+                      {Array.isArray(value) && value.includes('Other') && (
+                        <div className="flex items-center gap-2 pl-1 animate-in fade-in slide-in-from-top-1 duration-200">
+                          <div className="w-0.5 h-8 bg-violet-300 rounded-full shrink-0" />
                           <input
-                            type="checkbox"
-                            checked={Array.isArray(value) && value.includes(opt)}
-                            onChange={(e) => handleChoiceChange(f.field_name, opt, e.target.checked, true)}
-                            className="rounded text-violet-600 focus:ring-violet-500"
+                            type="text"
+                            value={formValues[`__other_${f.field_name}`] || ''}
+                            onChange={(e) => setFormValues(prev => ({ ...prev, [`__other_${f.field_name}`]: e.target.value }))}
+                            placeholder="Please specify..."
+                            className="flex-1 text-xs px-3 py-2 rounded-xl bg-violet-50 border border-violet-200 text-slate-800 placeholder-violet-300 focus:outline-none focus:border-violet-500 focus:bg-white transition"
                           />
-                          <span>{opt}</span>
-                        </label>
-                      ))}
+                        </div>
+                      )}
                     </div>
                   )}
 

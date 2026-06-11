@@ -13,6 +13,7 @@ import ParticipantSubmit from './pages/ParticipantSubmit';
 import RegistrationTracker from './pages/RegistrationTracker';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
+import AllEntries from './pages/AllEntries';
 
 // ProtectedLayout now uses <Outlet> — mounts ONCE and stays alive across tab switches.
 // Previously each route had its own <ProtectedLayout> causing full re-mount on every navigation.
@@ -71,6 +72,7 @@ const App = () => {
           <Route path="/campaign/edit/:id" element={<CampaignFormBuilder />} />
           <Route path="/campaign/details/:id" element={<CampaignDetails />} />
           <Route path="/reports" element={<Reports />} />
+          <Route path="/entries" element={<AllEntries />} />
           <Route path="/settings" element={<Settings />} />
         </Route>
 

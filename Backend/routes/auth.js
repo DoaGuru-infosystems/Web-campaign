@@ -88,6 +88,57 @@ router.get('/me', authMiddleware, (req, res) => {
   res.json({ user: req.user });
 });
 
+// Update Profile route
+router.put('/update-profile', authMiddleware, async (req, res) => {
+  const { name, email, password } = req.body;
+  const userId = req.user.id;
+
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required.' });
+  }
+
+  try {
+    // Check if email is already taken by another user
+    const [existing] = await pool.query('SELECT id FROM users WHERE email = ? AND id != ?', [email, userId]);
+    if (existing.length > 0) {
+      return res.status(400).json({ error: 'Email is already in use by another account.' });
+    }
+
+    let query = 'UPDATE users SET name = ?, email = ?';
+    let params = [name || req.user.name, email];
+
+    if (password && password.trim() !== '') {
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(password, salt);
+      query += ', password = ?';
+      params.push(hashedPassword);
+    }
+
+    query += ' WHERE id = ?';
+    params.push(userId);
+
+    await pool.query(query, params);
+
+    // Fetch updated user
+    const [updated] = await pool.query('SELECT id, name, email, role FROM users WHERE id = ?', [userId]);
+
+    // Create Audit Log
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    await pool.query(
+      'INSERT INTO audit_logs (user_id, user_email, action, details, ip_address) VALUES (?, ?, ?, ?, ?)',
+      [userId, email, 'Update Profile', `Updated profile settings (email: ${email})`, ip]
+    );
+
+    res.json({
+      message: 'Profile updated successfully',
+      user: updated[0]
+    });
+  } catch (err) {
+    console.error('Update profile error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 module.exports = {
   router,
   authMiddleware
