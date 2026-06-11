@@ -220,11 +220,128 @@ router.get('/track/:regId', async (req, res) => {
   }
 });
 
+// 2.5. All Registrations Across ALL Campaigns (Admin) — Global Entries View
+// Supports: campaign_id, status, gender, disease, date_from, date_to, search, page, limit
+router.get('/all', authMiddleware, async (req, res) => {
+  const { campaign_id, status, gender, disease, date_from, date_to, search, page, limit } = req.query;
+  const pageNum  = parseInt(page)  || 1;
+  const limitNum = parseInt(limit) || 10;
+  const offset   = (pageNum - 1) * limitNum;
+
+  try {
+    // --- Build WHERE clause dynamically ---
+    const conditions = [];
+    const params     = [];
+
+    if (campaign_id) {
+      conditions.push('r.campaign_id = ?');
+      params.push(campaign_id);
+    }
+    if (status) {
+      conditions.push('r.status = ?');
+      params.push(status);
+    }
+    if (date_from) {
+      conditions.push('DATE(r.created_at) >= ?');
+      params.push(date_from);
+    }
+    if (date_to) {
+      conditions.push('DATE(r.created_at) <= ?');
+      params.push(date_to);
+    }
+    // Gender: search JSON submitted_data for gender field value
+    if (gender) {
+      conditions.push("CAST(r.submitted_data AS CHAR) LIKE ?");
+      params.push(`%"${gender}"%`);
+    }
+    // Disease: fuzzy search inside JSON submitted_data
+    if (disease) {
+      conditions.push("CAST(r.submitted_data AS CHAR) LIKE ?");
+      params.push(`%${disease}%`);
+    }
+    // Free-text search on reg ID or any submitted data
+    if (search) {
+      conditions.push('(r.registration_id LIKE ? OR CAST(r.submitted_data AS CHAR) LIKE ? OR c.title LIKE ?)');
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+
+    const whereClause = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+
+    // Count query
+    const countSQL = `
+      SELECT COUNT(*) AS total
+      FROM registrations r
+      JOIN campaigns c ON r.campaign_id = c.id
+      ${whereClause}
+    `;
+    // Data query
+    const dataSQL = `
+      SELECT r.id, r.registration_id, r.status, r.created_at, r.submitted_data,
+             c.id AS campaign_id, c.title AS campaign_title, c.category AS campaign_category,
+             c.start_date, c.end_date
+      FROM registrations r
+      JOIN campaigns c ON r.campaign_id = c.id
+      ${whereClause}
+      ORDER BY r.created_at DESC
+      LIMIT ? OFFSET ?
+    `;
+
+    const [[countRow]] = await pool.query(countSQL, params);
+    const [rows]       = await pool.query(dataSQL, [...params, limitNum, offset]);
+
+    const registrations = rows.map(r => ({
+      ...r,
+      submitted_data: typeof r.submitted_data === 'string' ? JSON.parse(r.submitted_data) : r.submitted_data
+    }));
+
+    // Fetch all campaigns for the filter dropdown
+    const [campaigns] = await pool.query(
+      'SELECT id, title, category FROM campaigns ORDER BY title ASC'
+    );
+
+    // Collect disease options from FIELD DEFINITIONS (campaign_fields table)
+    // so all configured options appear in the dropdown — not just submitted ones.
+    const [diseaseFields] = await pool.query(
+      "SELECT options FROM campaign_fields WHERE label REGEXP 'disease' AND (field_type = 'Multi Select' OR field_type = 'Checkbox' OR field_type = 'Dropdown')"
+    );
+    const diseaseSet = new Set();
+    diseaseFields.forEach(f => {
+      const opts = typeof f.options === 'string' ? JSON.parse(f.options) : (f.options || []);
+      opts.filter(o => o && o !== 'Other').forEach(o => diseaseSet.add(o));
+    });
+    // Also append any custom "Other" typed values from actual submissions
+    registrations.forEach(r => {
+      Object.entries(r.submitted_data || {}).forEach(([key, val]) => {
+        if (/disease/i.test(key)) {
+          const vals = Array.isArray(val) ? val : (val ? [String(val)] : []);
+          vals.filter(v => v && v !== 'Other' && !diseaseSet.has(v)).forEach(v => diseaseSet.add(v));
+        }
+      });
+    });
+
+
+    res.json({
+      registrations,
+      campaigns,
+      diseaseValues: [...diseaseSet].sort(),
+      pagination: {
+        total: countRow.total,
+        page: pageNum,
+        limit: limitNum,
+        total_pages: Math.ceil(countRow.total / limitNum)
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching all registrations:', err);
+    res.status(500).json({ error: 'Failed to fetch all registrations.' });
+  }
+});
+
 // 3. View All Registrations for Campaign (Admin)
 // Supports search, sorting, filtering, and returns campaign fields so the front-end can dynamically build the table headers
 router.get('/campaign/:campaignId', authMiddleware, async (req, res) => {
   const { campaignId } = req.params;
-  const { search, status, sort_by, sort_order, page, limit } = req.query;
+  const { search, status, disease, sort_by, sort_order, page, limit } = req.query;
 
   const pageNum = parseInt(page) || 1;
   const limitNum = parseInt(limit) || 10;
@@ -249,6 +366,12 @@ router.get('/campaign/:campaignId', authMiddleware, async (req, res) => {
       countQuery += ' AND status = ?';
       dataQuery += ' AND status = ?';
       params.push(status);
+    }
+
+    if (disease) {
+      countQuery += ' AND CAST(submitted_data AS CHAR) LIKE ?';
+      dataQuery += ' AND CAST(submitted_data AS CHAR) LIKE ?';
+      params.push(`%${disease}%`);
     }
 
     if (search) {

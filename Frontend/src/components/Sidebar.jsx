@@ -9,6 +9,7 @@ import {
   LogOut, 
   Megaphone,
   UserCheck,
+  Table2,
   X
 } from 'lucide-react';
 import api from '../utils/api';
@@ -23,11 +24,12 @@ const Sidebar = ({ adminName, isOpen, onClose }) => {
   };
 
   const navItems = [
-    { name: 'Dashboard', path: '/', icon: LayoutDashboard },
-    { name: 'Create Campaign', path: '/campaign/create', icon: PlusCircle },
-    { name: 'View Campaigns', path: '/campaigns', icon: Layers },
-    { name: 'Reports & Analytics', path: '/reports', icon: BarChart3 },
-    { name: 'Settings', path: '/settings', icon: SettingsIcon },
+    { name: 'Dashboard',         path: '/',         icon: LayoutDashboard },
+    { name: 'Create Campaign',    path: '/campaign/create', icon: PlusCircle },
+    { name: 'View Campaigns',     path: '/campaigns', icon: Layers },
+    { name: 'All Entries',        path: '/entries',   icon: Table2 },
+    { name: 'Reports & Analytics',path: '/reports',   icon: BarChart3 },
+    { name: 'Settings',           path: '/settings',  icon: SettingsIcon },
   ];
 
   return (
