@@ -1,29 +1,35 @@
-import React, { useState } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
-import Sidebar from './components/Sidebar';
-import Header from './components/Header';
+import React, { useState } from "react";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  Outlet,
+} from "react-router-dom";
+import Sidebar from "./components/Sidebar";
+import Header from "./components/Header";
 
 // Pages
-import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';
-import CampaignsList from './pages/CampaignsList';
-import CampaignFormBuilder from './pages/CampaignFormBuilder';
-import CampaignDetails from './pages/CampaignDetails';
-import ParticipantSubmit from './pages/ParticipantSubmit';
-import RegistrationTracker from './pages/RegistrationTracker';
-import Reports from './pages/Reports';
-import Settings from './pages/Settings';
+import Login from "./pages/Login";
+import Dashboard from "./pages/Dashboard";
+import CampaignsList from "./pages/CampaignsList";
+import CampaignFormBuilder from "./pages/CampaignFormBuilder";
+import CampaignDetails from "./pages/CampaignDetails";
+import ParticipantSubmit from "./pages/ParticipantSubmit";
+import RegistrationTracker from "./pages/RegistrationTracker";
+import Reports from "./pages/Reports";
+import Settings from "./pages/Settings";
 
 // ProtectedLayout now uses <Outlet> — mounts ONCE and stays alive across tab switches.
 // Previously each route had its own <ProtectedLayout> causing full re-mount on every navigation.
 const ProtectedLayout = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const token = localStorage.getItem('token');
+  const token = localStorage.getItem("token");
   if (!token) {
     return <Navigate to="/login" replace />;
   }
 
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
 
   return (
     <div className="flex h-screen bg-slate-50/60 overflow-hidden font-sans relative">
@@ -34,14 +40,18 @@ const ProtectedLayout = () => {
 
       {/* Mobile sidebar overlay backdrop */}
       {sidebarOpen && (
-        <div 
+        <div
           className="fixed inset-0 bg-slate-900/30 backdrop-blur-sm z-40 lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
 
       {/* Sidebar — stays mounted, handles open/close */}
-      <Sidebar adminName={user?.email || 'Administrator'} isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Sidebar
+        adminName={user?.email || "Administrator"}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+      />
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden z-10">
         <Header onToggleSidebar={() => setSidebarOpen(true)} />

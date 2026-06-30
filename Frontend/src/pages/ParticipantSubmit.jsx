@@ -311,42 +311,89 @@ const ParticipantSubmit = () => {
 
   // Success Screen
   if (submitSuccess) {
+    const printTicket = () => {
+      // Small timeout ensures DOM is fully painted before print dialog
+      setTimeout(() => window.print(), 150);
+    };
+
     return (
-      <div className="min-h-screen bg-slate-50/50 text-slate-800 flex items-center justify-center p-6 relative overflow-hidden font-sans">
+      <div className="min-h-screen bg-slate-50/50 text-slate-800 flex items-center justify-center p-4 relative overflow-hidden font-sans">
         <div className="absolute top-[-10%] left-[-10%] w-[60%] h-[60%] rounded-full bg-violet-200/50 blur-[130px] pointer-events-none" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[60%] h-[60%] rounded-full bg-indigo-200/40 blur-[130px] pointer-events-none" />
-        <div className="max-w-xl w-full bg-white/70 backdrop-blur-md border border-white/40 p-8 rounded-3xl shadow-2xl space-y-6 text-center animate-in fade-in zoom-in-95 duration-200 relative z-10" id="receipt-print">
-          
-          <div className="flex flex-col items-center">
-            <div className="bg-emerald-500 p-3 rounded-full text-white mb-4 shadow-lg shadow-emerald-500/20">
-              <Check className="h-8 w-8" />
+
+        {/* ── Receipt / Ticket Card ── */}
+        <div
+          id="receipt-print"
+          className="max-w-md w-full bg-white/80 backdrop-blur-md border border-white/40 rounded-3xl shadow-2xl space-y-5 relative z-10 overflow-hidden"
+        >
+          {/* Ticket top banner */}
+          <div className="bg-gradient-to-r from-violet-600 via-indigo-600 to-purple-600 px-6 pt-7 pb-6 text-center relative overflow-hidden">
+            {/* Decorative circles */}
+            <div className="absolute top-0 right-0 w-20 h-20 bg-white/10 rounded-full -mr-6 -mt-6" />
+            <div className="absolute bottom-0 left-0 w-16 h-16 bg-white/10 rounded-full -ml-6 -mb-6" />
+
+            {/* Green check */}
+            <div className="print-check-circle w-14 h-14 bg-emerald-500 rounded-full flex items-center justify-center mx-auto mb-3 shadow-lg shadow-emerald-600/40 relative z-10">
+              <Check className="h-7 w-7 text-white" />
             </div>
-            <h3 className="text-xl font-bold text-slate-800">Registration Complete!</h3>
-            <p className="text-xs text-slate-500 mt-2 max-w-sm">{thankYouMessage}</p>
+            <h2 className="text-lg font-extrabold text-white relative z-10">Registration Successful!</h2>
+            <p className="text-[11px] text-white/75 mt-1 relative z-10 leading-relaxed max-w-xs mx-auto">
+              {thankYouMessage}
+            </p>
+          </div>
+
+          {/* Ticket perforation line */}
+          <div className="flex items-center px-0 -mt-1">
+            <div className="w-5 h-5 bg-slate-100 rounded-full -ml-2.5 shrink-0 border border-white/20" />
+            <div className="flex-1 border-t-2 border-dashed border-slate-200 mx-1" />
+            <div className="w-5 h-5 bg-slate-100 rounded-full -mr-2.5 shrink-0 border border-white/20" />
           </div>
 
           {/* Receipt details */}
-          <div className="bg-white/40 border border-white/30 p-5 rounded-2xl text-left space-y-3.5">
-            <div className="flex justify-between items-center border-b border-white/20 pb-2.5">
-              <span className="text-[10px] text-slate-400 font-bold uppercase">Campaign Title</span>
-              <span className="text-xs font-bold text-slate-700">{campaign.title}</span>
+          <div className="px-6 pb-2 space-y-3">
+            <div className="receipt-details bg-slate-50/80 border border-slate-200/70 rounded-2xl divide-y divide-slate-100 overflow-hidden">
+              {/* Campaign */}
+              <div className="flex justify-between items-center px-4 py-3">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Campaign</span>
+                <span className="text-xs font-bold text-slate-800 text-right max-w-[55%] leading-tight">{campaign.title}</span>
+              </div>
+              {/* Category */}
+              <div className="flex justify-between items-center px-4 py-3">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Category</span>
+                <span className="text-xs font-semibold text-slate-700">{campaign.category}</span>
+              </div>
+              {/* Registration ID */}
+              <div className="flex justify-between items-center px-4 py-3 bg-violet-50/60">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Registration ID</span>
+                <span className="print-reg-id text-sm font-mono font-extrabold text-violet-600 tracking-wide">{generatedRegId}</span>
+              </div>
+              {/* Date */}
+              <div className="flex justify-between items-center px-4 py-3">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Date & Time</span>
+                <span className="text-[11px] font-semibold text-slate-700">{new Date().toLocaleString()}</span>
+              </div>
             </div>
-            <div className="flex justify-between items-center border-b border-white/20 pb-2.5">
-              <span className="text-[10px] text-slate-400 font-bold uppercase">Registration ID</span>
-              <span className="text-sm font-mono font-bold text-violet-600">{generatedRegId}</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-[10px] text-slate-400 font-bold uppercase">Registration Date</span>
-              <span className="text-xs font-semibold text-slate-650">{new Date().toLocaleString()}</span>
-            </div>
+
+            {/* Keep this ID note */}
+            <p className="text-[10px] text-slate-400 text-center leading-snug px-2">
+              📎 Please save or print this ticket. Use the Registration ID to track your status.
+            </p>
+
+            {/* Mobile note about printing */}
+            <p className="text-[10px] text-slate-400 text-center leading-snug px-2 print:hidden">
+              📱 On mobile: tap <strong>Print Ticket</strong> → choose <em>"Save as PDF"</em> to save.
+            </p>
           </div>
 
-          {/* Printable Instructions print */}
-          <div className="pt-2 text-xs text-slate-400 leading-snug">
-            Please copy or print your registration ticket. You can track your screening status using this ID.
+          {/* Second perforation */}
+          <div className="flex items-center px-0">
+            <div className="w-5 h-5 bg-slate-100 rounded-full -ml-2.5 shrink-0 border border-white/20" />
+            <div className="flex-1 border-t-2 border-dashed border-slate-200 mx-1" />
+            <div className="w-5 h-5 bg-slate-100 rounded-full -mr-2.5 shrink-0 border border-white/20" />
           </div>
 
-          <div className="flex items-center space-x-3 w-full border-t border-slate-100 pt-5 print:hidden">
+          {/* Action buttons */}
+          <div className="px-6 pb-6 flex items-center gap-3 print:hidden">
             <button
               onClick={() => navigate('/track')}
               className="flex-1 px-4 py-3 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-bold transition"
@@ -354,18 +401,18 @@ const ParticipantSubmit = () => {
               Track Status
             </button>
             <button
-              onClick={() => window.print()}
-              className="flex-1 flex items-center justify-center space-x-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold px-4 py-3 rounded-xl transition"
+              onClick={printTicket}
+              className="flex-1 flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold px-4 py-3 rounded-xl transition shadow-lg shadow-slate-900/20"
             >
               <Printer className="h-4 w-4" />
-              <span>Print Ticket</span>
+              Print Ticket
             </button>
           </div>
-
         </div>
       </div>
     );
   }
+
 
   return (
     <div className="min-h-screen bg-slate-50/50 py-12 px-4 relative overflow-hidden font-sans flex items-center justify-center">
