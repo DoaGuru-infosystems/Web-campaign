@@ -40,9 +40,11 @@ const Login = () => {
         
         {/* Header Branding */}
         <div className="flex flex-col items-center mb-8 text-center">
-          <div className="bg-violet-600 p-3.5 rounded-2xl text-white shadow-xl shadow-violet-650/20 mb-4 animate-bounce">
-            <Megaphone className="h-8 w-8" />
-          </div>
+          <img 
+            src="/applogo.jpeg" 
+            alt="CampaignFlow Logo" 
+            className="h-24 w-24 rounded-2xl object-cover border border-slate-100 shadow-md mb-4"
+          />
           <h1 className="text-2xl font-bold tracking-tight text-slate-800">Welcome Back</h1>
           <p className="text-xs text-slate-500 mt-2 font-medium">Log in to manage your campaigns and responses</p>
         </div>

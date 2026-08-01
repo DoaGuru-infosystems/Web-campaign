@@ -144,7 +144,7 @@ router.post('/', async (req, res) => {
     // { url: "/uploads/xyz.png", filename: "xyz.png", size: 1234, mimetype: "image/png" }
     // or string path if simple, or arrays for multiple upload fields
     for (let f of fields) {
-      if (['Single Image Upload', 'Single PDF Upload', 'Signature Upload', 'File Upload'].includes(f.field_type)) {
+      if (['Single Image Upload', 'Single PDF Upload', 'Signature Upload', 'File Upload', 'Click Photo'].includes(f.field_type)) {
         const fileObj = submitted_data[f.field_name];
         if (fileObj && typeof fileObj === 'object' && fileObj.url) {
           await conn.query(`
@@ -265,6 +265,11 @@ router.get('/all', authMiddleware, async (req, res) => {
       params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
 
+    if (req.user.role === 'Employee') {
+      conditions.push('c.id IN (SELECT campaign_id FROM campaign_assignments WHERE user_id = ?)');
+      params.push(req.user.id);
+    }
+
     const whereClause = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
     // Count query
@@ -274,13 +279,14 @@ router.get('/all', authMiddleware, async (req, res) => {
       JOIN campaigns c ON r.campaign_id = c.id
       ${whereClause}
     `;
-    // Data query
     const dataSQL = `
       SELECT r.id, r.registration_id, r.status, r.created_at, r.submitted_data,
              c.id AS campaign_id, c.title AS campaign_title, c.category AS campaign_category,
-             c.start_date, c.end_date
+             c.start_date, c.end_date, c.test_template_id,
+             pt.id AS test_id, pt.refer_to_hospital, pt.travelling_by
       FROM registrations r
       JOIN campaigns c ON r.campaign_id = c.id
+      LEFT JOIN patient_tests pt ON r.id = pt.registration_id
       ${whereClause}
       ORDER BY r.created_at DESC
       LIMIT ? OFFSET ?
@@ -348,7 +354,15 @@ router.get('/campaign/:campaignId', authMiddleware, async (req, res) => {
   const offset = (pageNum - 1) * limitNum;
 
   try {
-    // 1. Fetch Campaign fields (schema)
+    // 1. Verify campaign visibility for employee
+    if (req.user.role === 'Employee') {
+      const [assignments] = await pool.query('SELECT 1 FROM campaign_assignments WHERE campaign_id = ? AND user_id = ?', [campaignId, req.user.id]);
+      if (assignments.length === 0) {
+        return res.status(403).json({ error: 'Access denied. You are not assigned to this campaign.' });
+      }
+    }
+
+    // Fetch Campaign fields (schema)
     const [fields] = await pool.query('SELECT * FROM campaign_fields WHERE campaign_id = ? ORDER BY sort_order ASC', [campaignId]);
     const parsedFields = fields.map(f => ({
       ...f,
@@ -417,10 +431,18 @@ router.get('/campaign/:campaignId', authMiddleware, async (req, res) => {
   }
 });
 
-// 3.5. Export All Registrations for Campaign (Admin)
+// 3.5. Export All Registrations for Campaign (Admin & Employee)
 router.get('/export/:campaignId', authMiddleware, async (req, res) => {
   const { campaignId } = req.params;
   try {
+    // Verify visibility for employee
+    if (req.user.role === 'Employee') {
+      const [assignments] = await pool.query('SELECT 1 FROM campaign_assignments WHERE campaign_id = ? AND user_id = ?', [campaignId, req.user.id]);
+      if (assignments.length === 0) {
+        return res.status(403).json({ error: 'Access denied. You are not assigned to this campaign.' });
+      }
+    }
+
     const [registrations] = await pool.query(
       'SELECT * FROM registrations WHERE campaign_id = ? ORDER BY created_at DESC',
       [campaignId]
@@ -438,7 +460,7 @@ router.get('/export/:campaignId', authMiddleware, async (req, res) => {
   }
 });
 
-// 4. View Specific Registration Details (Admin)
+// 4. View Specific Registration Details (Admin & Employee)
 router.get('/:id', authMiddleware, async (req, res) => {
   const { id } = req.params;
   try {
@@ -454,6 +476,14 @@ router.get('/:id', authMiddleware, async (req, res) => {
     }
 
     const reg = regs[0];
+
+    // Verify visibility for employee
+    if (req.user.role === 'Employee') {
+      const [assignments] = await pool.query('SELECT 1 FROM campaign_assignments WHERE campaign_id = ? AND user_id = ?', [reg.campaign_id, req.user.id]);
+      if (assignments.length === 0) {
+        return res.status(403).json({ error: 'Access denied. You are not assigned to this campaign.' });
+      }
+    }
     
     // Get fields layout for parsing
     const [fields] = await pool.query('SELECT * FROM campaign_fields WHERE campaign_id = ? ORDER BY sort_order ASC', [reg.campaign_id]);
@@ -482,7 +512,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// 5. Update Registration Status (Admin)
+// 5. Update Registration Status (Admin & Employee)
 router.put('/:id/status', authMiddleware, async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
@@ -492,9 +522,23 @@ router.put('/:id/status', authMiddleware, async (req, res) => {
   }
 
   try {
-    const [regs] = await pool.query('SELECT registration_id, campaign_id FROM registrations WHERE id = ?', [id]);
+    const [regs] = await pool.query(`
+      SELECT r.registration_id, r.campaign_id 
+      FROM registrations r
+      JOIN campaigns c ON r.campaign_id = c.id
+      WHERE r.id = ?
+    `, [id]);
+
     if (regs.length === 0) {
       return res.status(404).json({ error: 'Registration not found' });
+    }
+
+    // Verify visibility/assignment for employee
+    if (req.user.role === 'Employee') {
+      const [assignments] = await pool.query('SELECT 1 FROM campaign_assignments WHERE campaign_id = ? AND user_id = ?', [regs[0].campaign_id, req.user.id]);
+      if (assignments.length === 0) {
+        return res.status(403).json({ error: 'Access denied. You are not assigned to this campaign.' });
+      }
     }
 
     await pool.query('UPDATE registrations SET status = ? WHERE id = ?', [status, id]);
@@ -510,6 +554,125 @@ router.put('/:id/status', authMiddleware, async (req, res) => {
   } catch (err) {
     console.error('Error updating status:', err);
     res.status(500).json({ error: 'Failed to update registration status' });
+  }
+});
+
+// Save diagnostic test for a patient registration
+router.post('/:registrationId/test', authMiddleware, async (req, res) => {
+  const { registrationId } = req.params;
+  const { vitals_data, test_data } = req.body;
+
+  try {
+    // 1. Find the registration
+    const [regs] = await pool.query(
+      'SELECT id FROM registrations WHERE registration_id = ? OR id = ?',
+      [registrationId, registrationId]
+    );
+
+    if (regs.length === 0) {
+      return res.status(404).json({ error: 'Registration not found' });
+    }
+
+    const regDbId = regs[0].id;
+
+    // 2. Check if a test entry already exists
+    const [existing] = await pool.query(
+      'SELECT * FROM patient_tests WHERE registration_id = ?',
+      [regDbId]
+    );
+
+    const hasExisting = existing.length > 0;
+    const existingTest = hasExisting ? existing[0] : null;
+
+    // Determine values to write
+    let finalVitals = vitals_data;
+    let finalTestData = test_data;
+    let finalRefer = req.body.refer_to_hospital;
+    let finalTravel = req.body.travelling_by;
+
+    if (hasExisting) {
+      // If updating, only overwrite if passed in request body
+      if (vitals_data === undefined) {
+        finalVitals = typeof existingTest.vitals_data === 'string' 
+          ? JSON.parse(existingTest.vitals_data) 
+          : existingTest.vitals_data;
+      }
+      if (test_data === undefined) {
+        finalTestData = typeof existingTest.test_data === 'string' 
+          ? JSON.parse(existingTest.test_data) 
+          : existingTest.test_data;
+      }
+      if (finalRefer === undefined) {
+        finalRefer = existingTest.refer_to_hospital;
+      }
+      if (finalTravel === undefined) {
+        finalTravel = existingTest.travelling_by;
+      }
+    } else {
+      // If inserting, apply defaults if undefined
+      if (finalVitals === undefined) finalVitals = {};
+      if (finalTestData === undefined) finalTestData = {};
+      if (finalRefer === undefined) finalRefer = 'No';
+      if (finalTravel === undefined) finalTravel = 'None';
+    }
+
+    if (hasExisting) {
+      // Update
+      await pool.query(
+        'UPDATE patient_tests SET vitals_data = ?, test_data = ?, refer_to_hospital = ?, travelling_by = ? WHERE registration_id = ?',
+        [JSON.stringify(finalVitals || {}), JSON.stringify(finalTestData || {}), finalRefer, finalTravel, regDbId]
+      );
+      res.json({ message: 'Patient test updated successfully', registration_id: regDbId });
+    } else {
+      // Insert
+      await pool.query(
+        'INSERT INTO patient_tests (registration_id, vitals_data, test_data, refer_to_hospital, travelling_by) VALUES (?, ?, ?, ?, ?)',
+        [regDbId, JSON.stringify(finalVitals || {}), JSON.stringify(finalTestData || {}), finalRefer, finalTravel]
+      );
+      res.status(201).json({ message: 'Patient test saved successfully', registration_id: regDbId });
+    }
+  } catch (err) {
+    console.error('Error saving patient test:', err);
+    res.status(500).json({ error: 'Failed to save patient test' });
+  }
+});
+
+// Fetch diagnostic test for a patient registration
+router.get('/:registrationId/test', authMiddleware, async (req, res) => {
+  const { registrationId } = req.params;
+
+  try {
+    const [regs] = await pool.query(
+      'SELECT id FROM registrations WHERE registration_id = ? OR id = ?',
+      [registrationId, registrationId]
+    );
+
+    if (regs.length === 0) {
+      return res.status(404).json({ error: 'Registration not found' });
+    }
+
+    const regDbId = regs[0].id;
+
+    const [tests] = await pool.query(
+      'SELECT * FROM patient_tests WHERE registration_id = ?',
+      [regDbId]
+    );
+
+    if (tests.length === 0) {
+      return res.json({ test: null });
+    }
+
+    const test = tests[0];
+    res.json({
+      test: {
+        ...test,
+        vitals_data: typeof test.vitals_data === 'string' ? JSON.parse(test.vitals_data) : test.vitals_data,
+        test_data: typeof test.test_data === 'string' ? JSON.parse(test.test_data) : test.test_data,
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching patient test:', err);
+    res.status(500).json({ error: 'Failed to retrieve patient test' });
   }
 });
 

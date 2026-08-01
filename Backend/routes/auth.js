@@ -139,6 +139,73 @@ router.put('/update-profile', authMiddleware, async (req, res) => {
   }
 });
 
+// Get list of all employees (only for Admin role)
+router.get('/employees', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'Admin') {
+    return res.status(403).json({ error: 'Access denied. Administrator privileges required.' });
+  }
+
+  try {
+    const [employees] = await pool.query("SELECT id, name, email, role, created_at FROM users WHERE role = 'Employee' ORDER BY name ASC");
+    res.json({ employees });
+  } catch (err) {
+    console.error('Fetch employees error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Register a new Employee (only for Admin role)
+router.post('/register-employee', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'Admin') {
+    return res.status(403).json({ error: 'Access denied. Administrator privileges required.' });
+  }
+
+  const { name, email, password } = req.body;
+
+  if (!name || !email || !password) {
+    return res.status(400).json({ error: 'Name, email and password are required.' });
+  }
+
+  try {
+    // Check if user already exists
+    const [existing] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
+    if (existing.length > 0) {
+      return res.status(400).json({ error: 'A user with this email address already exists.' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    const [result] = await pool.query(
+      "INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, 'Employee')",
+      [name, email, hashedPassword]
+    );
+
+    const employeeId = result.insertId;
+
+    // Create Audit Log
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    await pool.query(
+      'INSERT INTO audit_logs (user_id, user_email, action, details, ip_address) VALUES (?, ?, ?, ?, ?)',
+      [req.user.id, req.user.email, 'Register Employee', `Registered new employee "${name}" (${email})`, ip]
+    );
+
+    res.status(201).json({
+      message: 'Employee registered successfully',
+      employee: {
+        id: employeeId,
+        name,
+        email,
+        role: 'Employee'
+      }
+    });
+  } catch (err) {
+    console.error('Register employee error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
 module.exports = {
   router,
   authMiddleware

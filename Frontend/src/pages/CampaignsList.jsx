@@ -37,6 +37,9 @@ const CampaignsList = () => {
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const isAdmin = user.role === 'Admin';
 
   // Filters
   const [searchVal, setSearchVal] = useState(searchParams.get('search') || '');
@@ -134,13 +137,15 @@ const CampaignsList = () => {
           <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">Campaign Directory</h2>
           <p className="text-sm text-slate-500 font-medium">Create, configure, monitor, and duplicate dynamic campaign workflows</p>
         </div>
-        <button
-          onClick={() => navigate('/campaign/create')}
-          className="flex items-center justify-center space-x-2 bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold px-5 py-3 rounded-xl shadow-lg shadow-violet-600/25 active:scale-98 transition duration-200 shrink-0"
-        >
-          <Plus className="h-4.5 w-4.5" />
-          <span>Create Campaign</span>
-        </button>
+        {isAdmin && (
+          <button
+            onClick={() => navigate('/campaign/create')}
+            className="flex items-center justify-center space-x-2 bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold px-5 py-3 rounded-xl shadow-lg shadow-violet-600/25 active:scale-98 transition duration-200 shrink-0"
+          >
+            <Plus className="h-4.5 w-4.5" />
+            <span>Create Campaign</span>
+          </button>
+        )}
       </div>
 
       {/* Filters & Search Row */}
@@ -295,15 +300,22 @@ const CampaignsList = () => {
                   </div>
 
                   {/* Micro stats */}
-                  <div className="flex items-center justify-between text-xs text-slate-500 font-semibold border-t border-slate-50 pt-3">
-                    <div className="flex items-center space-x-1">
-                      <Calendar className="h-3.5 w-3.5 text-slate-400" />
-                      <span>{camp.start_date ? camp.start_date.split('T')[0] : 'N/A'}</span>
-                    </div>
-                    <div className="flex items-center space-x-1">
-                      <Users className="h-3.5 w-3.5 text-slate-400" />
-                      <span className="font-bold text-slate-700">{camp.total_registrations || 0}</span>
-                      <span>regs</span>
+                  <div className="flex flex-col space-y-2 border-t border-slate-50 pt-3">
+                    {camp.assigned_employee_name && isAdmin && (
+                      <div className="text-[10px] font-extrabold text-violet-650 bg-violet-50/80 px-2.5 py-1 rounded-lg self-start">
+                        Assigned: {camp.assigned_employee_name}
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between text-xs text-slate-500 font-semibold">
+                      <div className="flex items-center space-x-1">
+                        <Calendar className="h-3.5 w-3.5 text-slate-400" />
+                        <span>{camp.start_date ? camp.start_date.split('T')[0] : 'N/A'}</span>
+                      </div>
+                      <div className="flex items-center space-x-1">
+                        <Users className="h-3.5 w-3.5 text-slate-400" />
+                        <span className="font-bold text-slate-700">{camp.total_registrations || 0}</span>
+                        <span>regs</span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -314,27 +326,31 @@ const CampaignsList = () => {
                   className="px-5 py-3.5 bg-white/40 border-t border-white/20 flex items-center justify-between"
                 >
                   <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => navigate(`/campaign/edit/${camp.id}`)}
-                      title="Edit Campaign"
-                      className="p-1.5 bg-white border border-slate-205 text-slate-600 rounded-lg hover:border-violet-500 hover:text-violet-500 transition"
-                    >
-                      <Edit className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDuplicate(camp.id, camp.title)}
-                      title="Duplicate"
-                      className="p-1.5 bg-white border border-slate-205 text-slate-600 rounded-lg hover:border-violet-500 hover:text-violet-500 transition"
-                    >
-                      <Copy className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(camp.id, camp.title)}
-                      title="Delete Campaign"
-                      className="p-1.5 bg-white border border-slate-205 hover:bg-rose-500/10 hover:border-rose-500 hover:text-rose-500 text-slate-500 rounded-lg transition"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                    {isAdmin && (
+                      <>
+                        <button
+                          onClick={() => navigate(`/campaign/edit/${camp.id}`)}
+                          title="Edit Campaign"
+                          className="p-1.5 bg-white border border-slate-205 text-slate-600 rounded-lg hover:border-violet-500 hover:text-violet-500 transition"
+                        >
+                          <Edit className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDuplicate(camp.id, camp.title)}
+                          title="Duplicate"
+                          className="p-1.5 bg-white border border-slate-205 text-slate-600 rounded-lg hover:border-violet-500 hover:text-violet-500 transition"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(camp.id, camp.title)}
+                          title="Delete Campaign"
+                          className="p-1.5 bg-white border border-slate-205 hover:bg-rose-500/10 hover:border-rose-500 hover:text-rose-500 text-slate-500 rounded-lg transition"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </>
+                    )}
                   </div>
 
                   <div className="flex items-center space-x-2">

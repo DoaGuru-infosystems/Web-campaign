@@ -18,8 +18,12 @@ async function logActivity(req, action, details) {
   }
 }
 
-// 1. Create Campaign
+// 1. Create Campaign (Admin Only)
 router.post('/', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'Admin') {
+    return res.status(403).json({ error: 'Access denied. Only administrators can perform this action.' });
+  }
+
   const {
     title,
     description,
@@ -31,12 +35,24 @@ router.post('/', authMiddleware, async (req, res) => {
     submission_limit,
     thank_you_message,
     registration_id_prefix,
+    assigned_employee_id,
+    assigned_employee_ids, // array of employee IDs
+    test_template_id,
     fields // array of field configurations
   } = req.body;
 
   if (!title || !start_date || !end_date || !category) {
     return res.status(400).json({ error: 'Title, start/end dates, and category are required.' });
   }
+
+  // Parse employee assignments
+  let employeeIds = [];
+  if (Array.isArray(assigned_employee_ids)) {
+    employeeIds = assigned_employee_ids.map(uid => parseInt(uid)).filter(uid => !isNaN(uid));
+  } else if (assigned_employee_id) {
+    employeeIds = [parseInt(assigned_employee_id)];
+  }
+  const firstEmployeeId = employeeIds.length > 0 ? employeeIds[0] : null;
 
   const conn = await pool.getConnection();
   try {
@@ -46,8 +62,9 @@ router.post('/', authMiddleware, async (req, res) => {
     const [campResult] = await conn.query(`
       INSERT INTO campaigns (
         title, description, banner_url, start_date, end_date, 
-        category, status, submission_limit, thank_you_message, registration_id_prefix
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        category, status, submission_limit, thank_you_message, registration_id_prefix,
+        assigned_employee_id, test_template_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       title, 
       description || '', 
@@ -58,7 +75,9 @@ router.post('/', authMiddleware, async (req, res) => {
       status || 'Draft', 
       submission_limit ? parseInt(submission_limit) : null, 
       thank_you_message || 'Thank you for your submission!',
-      registration_id_prefix || 'CMP-2026'
+      registration_id_prefix || 'CMP-2026',
+      firstEmployeeId,
+      (test_template_id && !isNaN(parseInt(test_template_id))) ? parseInt(test_template_id) : null
     ]);
 
     const campaignId = campResult.insertId;
@@ -87,6 +106,15 @@ router.post('/', authMiddleware, async (req, res) => {
       }
     }
 
+    // Insert assignments into junction table
+    if (employeeIds.length > 0) {
+      const assignmentValues = employeeIds.map(empId => [campaignId, empId]);
+      await conn.query(`
+        INSERT IGNORE INTO campaign_assignments (campaign_id, user_id) 
+        VALUES ?
+      `, [assignmentValues]);
+    }
+
     // Add general notification
     await conn.query(`
       INSERT INTO notifications (type, message) 
@@ -108,16 +136,26 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 });
 
-// 2. View All Campaigns (Admin)
+// 2. View All Campaigns (Admin & Employee)
 router.get('/', authMiddleware, async (req, res) => {
   const { search, category, status } = req.query;
   let query = `
-    SELECT c.*, COUNT(r.id) AS total_registrations 
+    SELECT c.*, COUNT(DISTINCT r.id) AS total_registrations,
+           GROUP_CONCAT(DISTINCT u.name ORDER BY u.name ASC SEPARATOR ', ') AS assigned_employee_name,
+           GROUP_CONCAT(DISTINCT u.id) AS assigned_employee_ids
     FROM campaigns c 
     LEFT JOIN registrations r ON c.id = r.campaign_id
+    LEFT JOIN campaign_assignments ca ON c.id = ca.campaign_id
+    LEFT JOIN users u ON ca.user_id = u.id
   `;
   const params = [];
   const conditions = [];
+
+  // If user is an employee, only show campaigns assigned to them
+  if (req.user.role === 'Employee') {
+    conditions.push('c.id IN (SELECT campaign_id FROM campaign_assignments WHERE user_id = ?)');
+    params.push(req.user.id);
+  }
 
   if (search) {
     conditions.push(`(c.title LIKE ? OR c.description LIKE ?)`);
@@ -188,7 +226,7 @@ router.get('/public/:id', async (req, res) => {
   }
 });
 
-// 4. View Single Campaign (Admin - Details & Config)
+// 4. View Single Campaign (Admin & Employee - Details & Config)
 router.get('/:id', authMiddleware, async (req, res) => {
   const { id } = req.params;
   try {
@@ -196,6 +234,30 @@ router.get('/:id', authMiddleware, async (req, res) => {
     if (camps.length === 0) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
+
+    const campaign = camps[0];
+
+    // Fetch assignments
+    const [assignments] = await pool.query('SELECT user_id FROM campaign_assignments WHERE campaign_id = ?', [id]);
+    const assignedEmployeeIds = assignments.map(a => a.user_id);
+
+    // Enforce employee assignment access check
+    if (req.user.role === 'Employee' && !assignedEmployeeIds.includes(req.user.id)) {
+      return res.status(403).json({ error: 'Access denied. You are not assigned to this campaign.' });
+    }
+
+    // Fetch user details for assigned employee
+    let assignedEmployees = [];
+    let assignedEmployeeNames = '';
+    if (assignedEmployeeIds.length > 0) {
+      const [users] = await pool.query('SELECT id, name, email FROM users WHERE id IN (?)', [assignedEmployeeIds]);
+      assignedEmployees = users;
+      assignedEmployeeNames = users.map(u => u.name).join(', ');
+    }
+
+    campaign.assigned_employee_ids = assignedEmployeeIds;
+    campaign.assigned_employees = assignedEmployees;
+    campaign.assigned_employee_name = assignedEmployeeNames;
 
     const [fields] = await pool.query('SELECT * FROM campaign_fields WHERE campaign_id = ? ORDER BY sort_order ASC', [id]);
 
@@ -207,7 +269,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
     }));
 
     res.json({
-      campaign: camps[0],
+      campaign,
       fields: parsedFields
     });
   } catch (err) {
@@ -216,8 +278,12 @@ router.get('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// 5. Update Campaign (Admin)
+// 5. Update Campaign (Admin Only)
 router.put('/:id', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'Admin') {
+    return res.status(403).json({ error: 'Access denied. Only administrators can perform this action.' });
+  }
+
   const { id } = req.params;
   const {
     title,
@@ -230,12 +296,24 @@ router.put('/:id', authMiddleware, async (req, res) => {
     submission_limit,
     thank_you_message,
     registration_id_prefix,
+    assigned_employee_id,
+    assigned_employee_ids, // array of employee IDs
+    test_template_id,
     fields
   } = req.body;
 
   if (!title || !start_date || !end_date || !category) {
     return res.status(400).json({ error: 'Title, dates, and category are required.' });
   }
+
+  // Parse employee assignments
+  let employeeIds = [];
+  if (Array.isArray(assigned_employee_ids)) {
+    employeeIds = assigned_employee_ids.map(uid => parseInt(uid)).filter(uid => !isNaN(uid));
+  } else if (assigned_employee_id) {
+    employeeIds = [parseInt(assigned_employee_id)];
+  }
+  const firstEmployeeId = employeeIds.length > 0 ? employeeIds[0] : null;
 
   const conn = await pool.getConnection();
   try {
@@ -246,7 +324,8 @@ router.put('/:id', authMiddleware, async (req, res) => {
       UPDATE campaigns 
       SET title = ?, description = ?, banner_url = ?, start_date = ?, 
           end_date = ?, category = ?, status = ?, submission_limit = ?, 
-          thank_you_message = ?, registration_id_prefix = ?
+          thank_you_message = ?, registration_id_prefix = ?, assigned_employee_id = ?,
+          test_template_id = ?
       WHERE id = ?
     `, [
       title, description || '', banner_url || null, start_date, 
@@ -254,6 +333,8 @@ router.put('/:id', authMiddleware, async (req, res) => {
       submission_limit ? parseInt(submission_limit) : null,
       thank_you_message || 'Thank you for your submission!',
       registration_id_prefix || 'CMP-2026',
+      firstEmployeeId,
+      (test_template_id && !isNaN(parseInt(test_template_id))) ? parseInt(test_template_id) : null,
       id
     ]);
 
@@ -284,6 +365,16 @@ router.put('/:id', authMiddleware, async (req, res) => {
       }
     }
 
+    // Update assignments in junction table
+    await conn.query('DELETE FROM campaign_assignments WHERE campaign_id = ?', [id]);
+    if (employeeIds.length > 0) {
+      const assignmentValues = employeeIds.map(empId => [id, empId]);
+      await conn.query(`
+        INSERT IGNORE INTO campaign_assignments (campaign_id, user_id) 
+        VALUES ?
+      `, [assignmentValues]);
+    }
+
     await conn.commit();
 
     await logActivity(req, 'Update Campaign', `Updated campaign "${title}" (ID: ${id})`);
@@ -298,8 +389,12 @@ router.put('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// 6. Delete Campaign (Admin)
+// 6. Delete Campaign (Admin Only)
 router.delete('/:id', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'Admin') {
+    return res.status(403).json({ error: 'Access denied. Only administrators can perform this action.' });
+  }
+
   const { id } = req.params;
   try {
     // Get title first for audit log
@@ -322,8 +417,12 @@ router.delete('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// 7. Duplicate Campaign (Admin)
+// 7. Duplicate Campaign (Admin Only)
 router.post('/:id/duplicate', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'Admin') {
+    return res.status(403).json({ error: 'Access denied. Only administrators can perform this action.' });
+  }
+
   const { id } = req.params;
   const conn = await pool.getConnection();
   try {
@@ -340,8 +439,9 @@ router.post('/:id/duplicate', authMiddleware, async (req, res) => {
     const [dupResult] = await conn.query(`
       INSERT INTO campaigns (
         title, description, banner_url, start_date, end_date, 
-        category, status, submission_limit, thank_you_message, registration_id_prefix
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        category, status, submission_limit, thank_you_message, registration_id_prefix,
+        assigned_employee_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       `${camp.title} (Copy)`,
       camp.description,
@@ -352,7 +452,8 @@ router.post('/:id/duplicate', authMiddleware, async (req, res) => {
       'Draft', // Always duplicate as Draft
       camp.submission_limit,
       camp.thank_you_message,
-      camp.registration_id_prefix
+      camp.registration_id_prefix,
+      camp.assigned_employee_id
     ]);
 
     const newCampaignId = dupResult.insertId;
@@ -378,6 +479,13 @@ router.post('/:id/duplicate', authMiddleware, async (req, res) => {
         f.options, // Already JSON string
         f.sort_order
       ]);
+    }
+
+    // Duplicate assignments in campaign_assignments
+    const [assignments] = await conn.query('SELECT user_id FROM campaign_assignments WHERE campaign_id = ?', [id]);
+    if (assignments.length > 0) {
+      const assignmentValues = assignments.map(a => [newCampaignId, a.user_id]);
+      await conn.query('INSERT INTO campaign_assignments (campaign_id, user_id) VALUES ?', [assignmentValues]);
     }
 
     await conn.commit();

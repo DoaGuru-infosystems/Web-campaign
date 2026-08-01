@@ -14,6 +14,8 @@ import RegistrationTracker from './pages/RegistrationTracker';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import AllEntries from './pages/AllEntries';
+import Employees from './pages/Employees';
+import TestTemplates from './pages/TestTemplates';
 
 // ProtectedLayout now uses <Outlet> — mounts ONCE and stays alive across tab switches.
 // Previously each route had its own <ProtectedLayout> causing full re-mount on every navigation.
@@ -74,6 +76,8 @@ const App = () => {
           <Route path="/reports" element={<Reports />} />
           <Route path="/entries" element={<AllEntries />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/employees" element={<Employees />} />
+          <Route path="/test-templates" element={<TestTemplates />} />
         </Route>
 
         {/* Fallback */}

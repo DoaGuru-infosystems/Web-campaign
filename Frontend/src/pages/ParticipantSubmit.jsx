@@ -12,9 +12,138 @@ import {
   PenTool, 
   ShieldAlert,
   Search,
-  BookOpen
+  BookOpen,
+  Camera,
+  Sparkles
 } from 'lucide-react';
 import api from '../utils/api';
+
+const compressImage = (file) => {
+  return new Promise((resolve) => {
+    // If not an image, return original
+    if (!file.type.startsWith('image/')) {
+      return resolve(file);
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const maxDim = 1600;
+        let w = img.width;
+        let h = img.height;
+
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              resolve(file); // fallback to original if blob creation fails
+              return;
+            }
+            const compressedFile = new File([blob], file.name, {
+              type: 'image/jpeg',
+              lastModified: Date.now(),
+            });
+            resolve(compressedFile);
+          },
+          'image/jpeg',
+          0.85
+        );
+      };
+      img.onerror = () => resolve(file);
+      img.src = event.target.result;
+    };
+    reader.onerror = () => resolve(file);
+    reader.readAsDataURL(file);
+  });
+};
+
+const detectBlur = (canvas) => {
+  const width = canvas.width;
+  const height = canvas.height;
+  
+  // Downscale image to a reasonable size (e.g. max 300px width/height) to speed up blur calculation
+  const maxDim = 300;
+  let w = width;
+  let h = height;
+  if (w > maxDim || h > maxDim) {
+    if (w > h) {
+      h = Math.round((h * maxDim) / w);
+      w = maxDim;
+    } else {
+      w = Math.round((w * maxDim) / h);
+      h = maxDim;
+    }
+  }
+  
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = w;
+  tempCanvas.height = h;
+  const tempCtx = tempCanvas.getContext('2d');
+  tempCtx.drawImage(canvas, 0, 0, w, h);
+  
+  try {
+    const imageData = tempCtx.getImageData(0, 0, w, h);
+    const pixels = imageData.data;
+    
+    // Convert to grayscale
+    const gray = new Float32Array(w * h);
+    for (let i = 0; i < pixels.length; i += 4) {
+      gray[i / 4] = 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
+    }
+    
+    // Apply Laplacian kernel:
+    // [ 0,  1,  0 ]
+    // [ 1, -4,  1 ]
+    // [ 0,  1,  0 ]
+    const laplacian = new Float32Array(w * h);
+    let sum = 0;
+    
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = y * w + x;
+        const val = 
+          gray[idx - w] + // top
+          gray[idx - 1] + // left
+          -4 * gray[idx] + // center
+          gray[idx + 1] + // right
+          gray[idx + w];  // bottom
+        laplacian[idx] = val;
+        sum += val;
+      }
+    }
+    
+    const mean = sum / (w * h);
+    
+    // Compute variance
+    let varianceSum = 0;
+    for (let i = 0; i < laplacian.length; i++) {
+      const diff = laplacian[i] - mean;
+      varianceSum += diff * diff;
+    }
+    
+    const variance = varianceSum / (w * h);
+    return variance;
+  } catch (e) {
+    console.error('Blur detection failed, bypassing:', e);
+    return 100; // Return safe variance if getImageData fails
+  }
+};
 
 const ParticipantSubmit = () => {
   const { id } = useParams();
@@ -39,10 +168,330 @@ const ParticipantSubmit = () => {
   const [generatedRegId, setGeneratedRegId] = useState('');
   const [thankYouMessage, setThankYouMessage] = useState('');
 
+  // OCR state for Aadhaar card parsing
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrMessage, setOcrMessage] = useState('');
+
   // Signature Pad State
   const sigCanvasRefs = useRef({});
   const isDrawingRefs = useRef({});
 
+  // Camera Modal States & Handlers
+  const [activeCameraField, setActiveCameraField] = useState(null);
+  const [cameraStream, setCameraStream] = useState(null);
+  const [capturedImage, setCapturedImage] = useState(null);
+  const [capturedBlob, setCapturedBlob] = useState(null);
+  const [cameraLoading, setCameraLoading] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const [cameraWarning, setCameraWarning] = useState('');
+  const [facingMode, setFacingMode] = useState('environment'); // 'user' or 'environment'
+  const videoRef = useRef(null);
+
+  const startCamera = async () => {
+    setCameraLoading(true);
+    setCameraError('');
+    setCameraWarning('');
+    setCapturedImage(null);
+    setCapturedBlob(null);
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setCameraError('Camera access is not supported on this browser or connection. Please use a secure (HTTPS) connection or upload a file instead.');
+      setCameraLoading(false);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: facingMode },
+          width: { ideal: 4032 },
+          height: { ideal: 3024 }
+        }
+      });
+      setCameraStream(stream);
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+    } catch (err) {
+      console.warn('Camera 4K constraints failed, falling back to 1080p:', err);
+      try {
+        const fallbackStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: facingMode },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          }
+        });
+        setCameraStream(fallbackStream);
+        if (videoRef.current) {
+          videoRef.current.srcObject = fallbackStream;
+        }
+      } catch (fallbackErr) {
+        console.error('All camera resolutions failed:', fallbackErr);
+        setCameraError('Could not access camera. Please make sure permissions are granted.');
+      }
+    } finally {
+      setCameraLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeCameraField) {
+      startCamera();
+    } else {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+        setCameraStream(null);
+      }
+      if (capturedImage && capturedImage.startsWith('blob:')) {
+        URL.revokeObjectURL(capturedImage);
+      }
+      setCapturedImage(null);
+      setCapturedBlob(null);
+      setCameraError('');
+      setCameraWarning('');
+    }
+    return () => {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [activeCameraField, facingMode]);
+
+  // Ensure stream binds when video element mounts
+  useEffect(() => {
+    if (videoRef.current && cameraStream && !capturedImage) {
+      videoRef.current.srcObject = cameraStream;
+    }
+  }, [cameraStream, capturedImage]);
+
+  const handleCapture = () => {
+    if (videoRef.current) {
+      const video = videoRef.current;
+      const canvas = document.createElement('canvas');
+      
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      const ctx = canvas.getContext('2d');
+      
+      // High-quality rendering settings
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) return;
+          const blobUrl = URL.createObjectURL(blob);
+          setCapturedImage(blobUrl);
+          setCapturedBlob(blob);
+          
+          // Run blur detection
+          const variance = detectBlur(canvas);
+          console.log('[Blur Detection] Laplacian Variance:', variance);
+          if (variance < 80) {
+            setCameraWarning('The captured photo appears to be blurry. For better OCR accuracy, please hold the camera steady and retake in a well-lit area.');
+          } else {
+            setCameraWarning('');
+          }
+        },
+        'image/jpeg',
+        1.0
+      );
+      
+      // Stop camera stream
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+        setCameraStream(null);
+      }
+    }
+  };
+
+  const handleRetry = () => {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(track => track.stop());
+      setCameraStream(null);
+    }
+    if (capturedImage && capturedImage.startsWith('blob:')) {
+      URL.revokeObjectURL(capturedImage);
+    }
+    setCapturedBlob(null);
+    setCameraWarning('');
+    startCamera();
+  };
+  const triggerAadharExtraction = async (filesOrFilename, originalname = '') => {
+    setOcrLoading(true);
+    setOcrMessage('Reading Aadhaar card... Extracting name, DOB, gender, address, city, district, and Aadhar number.');
+    try {
+      let payload = {};
+      if (Array.isArray(filesOrFilename)) {
+        payload = { files: filesOrFilename };
+      } else {
+        payload = { filename: filesOrFilename, originalname };
+      }
+
+      const response = await api.post('/upload/extract-aadhar', payload);
+      const details = response.data || response;
+
+      // Check if we actually extracted any values
+      const extractedKeys = ['aadharNumber', 'name', 'dob', 'gender', 'address', 'city', 'district', 'state', 'pincode'];
+      const hasData = details && extractedKeys.some(k => details[k] && String(details[k]).trim() !== '');
+
+      if (!hasData) {
+        if (response && response.message && (response.message.includes('PDF') || response.message.includes('not supported'))) {
+          setOcrMessage(response.message);
+        } else {
+          setOcrMessage('Could not extract details from the document. Please ensure the image is clear and readable, or fill the fields manually.');
+        }
+        return;
+      }
+
+      // Autofill matching fields
+      setFormValues(prev => {
+        const updated = { ...prev };
+        
+        fields.forEach(f => {
+          const fLabelLower = (f.label || '').toLowerCase();
+          const fNameLower = (f.field_name || '').toLowerCase();
+          
+          // 1. Aadhaar Number
+          if (fLabelLower.includes('aadhar') || fLabelLower.includes('aadhaar') || f.field_type === 'Aadhaar Number') {
+            if (details.aadharNumber) {
+              updated[f.field_name] = details.aadharNumber;
+            }
+          }
+          // 2. Full Name (guarding against relative/other names)
+          else if (
+            (fLabelLower.includes('name') || fNameLower.includes('name')) &&
+            !fLabelLower.includes('father') &&
+            !fLabelLower.includes('mother') &&
+            !fLabelLower.includes('spouse') &&
+            !fLabelLower.includes('husband') &&
+            !fLabelLower.includes('wife') &&
+            !fLabelLower.includes('doctor') &&
+            !fLabelLower.includes('guardian') &&
+            !fLabelLower.includes('nominee') &&
+            !fLabelLower.includes('witness')
+          ) {
+            if (details.name) {
+              updated[f.field_name] = details.name;
+            }
+          }
+          // 3. Date of Birth
+          else if (fLabelLower.includes('dob') || fLabelLower.includes('birth') || fLabelLower.includes('date of birth') || fNameLower.includes('dob') || fNameLower.includes('birth')) {
+            if (details.dob) {
+              // Convert DOB to YYYY-MM-DD if target field type is Date or Date Field
+              if (['Date', 'Date Field'].includes(f.field_type) && details.dob.includes('/')) {
+                const parts = details.dob.split('/');
+                if (parts.length === 3) {
+                  const day = parts[0].padStart(2, '0');
+                  const month = parts[1].padStart(2, '0');
+                  const year = parts[2];
+                  updated[f.field_name] = `${year}-${month}-${day}`; // YYYY-MM-DD
+                } else {
+                  updated[f.field_name] = details.dob;
+                }
+              } else {
+                updated[f.field_name] = details.dob;
+              }
+            }
+          }
+          // 4. Gender
+          else if (fLabelLower.includes('gender') || fLabelLower.includes('sex') || fNameLower.includes('gender') || fNameLower.includes('sex')) {
+            if (details.gender) {
+              const gLower = details.gender.toLowerCase();
+              if (gLower.includes('f')) {
+                updated[f.field_name] = 'Female';
+              } else if (gLower.includes('m')) {
+                updated[f.field_name] = 'Male';
+              } else {
+                updated[f.field_name] = details.gender;
+              }
+            }
+          }
+          // 5. Address
+          else if (fLabelLower.includes('address') || fNameLower.includes('address')) {
+            if (details.address) {
+              updated[f.field_name] = details.address;
+            }
+          }
+          // 6. City
+          else if (fLabelLower.includes('city') || fNameLower.includes('city')) {
+            if (details.city) {
+              updated[f.field_name] = details.city;
+            }
+          }
+          // 7. District
+          else if (fLabelLower.includes('district') || fNameLower.includes('district')) {
+            if (details.district) {
+              updated[f.field_name] = details.district;
+            }
+          }
+          // 8. State
+          else if (fLabelLower.includes('state') || fNameLower.includes('state')) {
+            if (details.state) {
+              updated[f.field_name] = details.state;
+            }
+          }
+          // 9. Pincode
+          else if (fLabelLower.includes('pincode') || fLabelLower.includes('pin code') || fNameLower.includes('pincode') || fNameLower.includes('pin')) {
+            if (details.pincode) {
+              updated[f.field_name] = details.pincode;
+            }
+          }
+        });
+        
+        return updated;
+      });
+      setOcrMessage(response.message || 'Aadhaar card details extracted and filled successfully!');
+    } catch (err) {
+      console.error('Aadhaar OCR extraction error:', err);
+      setOcrMessage('Failed to extract details from Aadhaar card. Please fill the fields manually.');
+    } finally {
+      setOcrLoading(false);
+      setTimeout(() => setOcrMessage(''), 8000);
+    }
+  };
+  const handleUsePhoto = async () => {
+    if (!capturedBlob || !activeCameraField) return;
+    
+    const fieldName = activeCameraField;
+    setActiveCameraField(null);
+    
+    setUploadingField(prev => ({ ...prev, [fieldName]: true }));
+    setUploadProgress(prev => ({ ...prev, [fieldName]: 0 }));
+    
+    try {
+      const file = new File([capturedBlob], `photo_${Date.now()}.jpg`, { type: 'image/jpeg' });
+      
+      const res = await api.upload(file, (percent) => {
+        setUploadProgress(prev => ({ ...prev, [fieldName]: percent }));
+      });
+      setFormValues(prev => ({ ...prev, [fieldName]: res }));
+      
+      const targetField = fields.find(f => f.field_name === fieldName);
+      const labelLower = (targetField?.label || '').toLowerCase();
+      const fieldNameLower = fieldName.toLowerCase();
+      const fieldTypeLower = (targetField?.field_type || '').toLowerCase();
+      
+      const isAadharUpload = 
+        labelLower.includes('aadhar') || 
+        labelLower.includes('aadhaar') || 
+        fieldNameLower.includes('aadhar') || 
+        fieldNameLower.includes('aadhaar') ||
+        fieldTypeLower.includes('aadhar') ||
+        fieldTypeLower.includes('aadhaar');
+
+      if (isAadharUpload && res.filename) {
+        triggerAadharExtraction(res.filename, res.originalname);
+      }
+    } catch (err) {
+      alert(err.message || 'Photo upload failed.');
+    } finally {
+      setUploadingField(prev => ({ ...prev, [fieldName]: false }));
+    }
+  };
   // Fetch campaign
   useEffect(() => {
     const fetchPublicCampaign = async () => {
@@ -70,7 +519,18 @@ const ParticipantSubmit = () => {
         }
 
         setCampaign(data.campaign);
-        setFields(data.fields);
+        
+        // Sort Aadhaar fields to the top
+        const sortedFields = [...data.fields].sort((a, b) => {
+          const aLower = (a.label || '').toLowerCase();
+          const bLower = (b.label || '').toLowerCase();
+          const aIsAadhar = aLower.includes('aadhar') || aLower.includes('aadhaar') || a.field_type === 'Aadhaar Number';
+          const bIsAadhar = bLower.includes('aadhar') || bLower.includes('aadhaar') || b.field_type === 'Aadhaar Number';
+          if (aIsAadhar && !bIsAadhar) return -1;
+          if (!aIsAadhar && bIsAadhar) return 1;
+          return 0;
+        });
+        setFields(sortedFields);
         
         // Seed default values
         const defaults = {};
@@ -186,11 +646,25 @@ const ParticipantSubmit = () => {
     setUploadingField(prev => ({ ...prev, [fieldName]: true }));
     setUploadProgress(prev => ({ ...prev, [fieldName]: 0 }));
 
+    const targetField = fields.find(f => f.field_name === fieldName);
+    const labelLower = (targetField?.label || '').toLowerCase();
+    const fieldNameLower = fieldName.toLowerCase();
+    const fieldTypeLower = (targetField?.field_type || '').toLowerCase();
+
+    const isAadharUpload = 
+      labelLower.includes('aadhar') || 
+      labelLower.includes('aadhaar') || 
+      fieldNameLower.includes('aadhar') || 
+      fieldNameLower.includes('aadhaar') ||
+      fieldTypeLower.includes('aadhar') ||
+      fieldTypeLower.includes('aadhaar');
+
     try {
       if (isMultiple) {
         const uploadedArr = Array.isArray(formValues[fieldName]) ? [...formValues[fieldName]] : [];
         for (let file of filesList) {
-          const res = await api.upload(file, (percent) => {
+          const fileToUpload = isAadharUpload ? file : await compressImage(file);
+          const res = await api.upload(fileToUpload, (percent) => {
             setUploadProgress(prev => ({ ...prev, [fieldName]: percent }));
           });
           uploadedArr.push(res);
@@ -198,10 +672,15 @@ const ParticipantSubmit = () => {
         setFormValues(prev => ({ ...prev, [fieldName]: uploadedArr }));
       } else {
         const file = filesList[0];
-        const res = await api.upload(file, (percent) => {
+        const fileToUpload = isAadharUpload ? file : await compressImage(file);
+        const res = await api.upload(fileToUpload, (percent) => {
           setUploadProgress(prev => ({ ...prev, [fieldName]: percent }));
         });
         setFormValues(prev => ({ ...prev, [fieldName]: res }));
+
+        if (isAadharUpload && res.filename) {
+          triggerAadharExtraction(res.filename, res.originalname);
+        }
       }
     } catch (err) {
       alert(err.message || 'File upload failed.');
@@ -441,6 +920,26 @@ const ParticipantSubmit = () => {
             </div>
           )}
 
+          {/* OCR Processing Message */}
+          {ocrMessage && (
+            <div className={`p-4 border rounded-2xl flex items-center text-xs font-semibold ${
+              ocrMessage.includes('failed') || ocrMessage.includes('Failed')
+                ? 'bg-rose-500/10 border-rose-500/35 text-rose-300'
+                : ocrMessage.includes('successfully')
+                  ? 'bg-emerald-500/10 border-emerald-500/35 text-emerald-600'
+                  : 'bg-indigo-500/10 border-indigo-500/35 text-indigo-650'
+            }`}>
+              {ocrLoading ? (
+                <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mr-3 shrink-0" />
+              ) : ocrMessage.includes('successfully') ? (
+                <Sparkles className="h-4 w-4 mr-3 text-emerald-500 shrink-0 animate-bounce" />
+              ) : (
+                <AlertCircle className="h-4 w-4 mr-3 text-rose-500 shrink-0" />
+              )}
+              <span>{ocrMessage}</span>
+            </div>
+          )}
+
           {/* Render Fields */}
           <form onSubmit={handleSubmit} className="space-y-5">
             {fields.map((f) => {
@@ -662,7 +1161,7 @@ const ParticipantSubmit = () => {
                   )}
 
                   {/* 13. File & Document Upload fields */}
-                  {['Single Image Upload', 'Single PDF Upload', 'File Upload'].includes(f.field_type) && (
+                  {['Single Image Upload', 'Single PDF Upload', 'File Upload', 'Click Photo'].includes(f.field_type) && (
                     <div className="space-y-2">
                       {value && value.url ? (
                         <div className="flex items-center justify-between bg-violet-50/40 border border-violet-100 p-3 rounded-xl">
@@ -682,73 +1181,123 @@ const ParticipantSubmit = () => {
                           </button>
                         </div>
                       ) : (
-                        <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 hover:border-violet-500 hover:bg-violet-500/5 py-6 rounded-2xl cursor-pointer transition">
+                        <div>
                           {isUploading ? (
-                            <div className="text-center space-y-2">
-                              <Loader2 className="h-6 w-6 text-violet-600 animate-spin mx-auto" />
+                            <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 py-6 rounded-2xl bg-slate-50">
+                              <Loader2 className="h-6 w-6 text-violet-600 animate-spin mx-auto mb-2" />
                               <span className="text-[10px] text-slate-500 font-semibold">Uploading: {progress}%</span>
                             </div>
                           ) : (
-                            <div className="text-center">
-                              <Upload className="h-6 w-6 text-slate-400 mx-auto mb-1.5" />
-                              <span className="block text-xs font-bold text-slate-600">Choose file or drag here</span>
-                              <span className="block text-[9px] text-slate-400 mt-0.5">Images and PDF up to 10MB</span>
-                            </div>
+                            f.field_type === 'Click Photo' ? (
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                {/* Option 1: Camera */}
+                                <button
+                                  type="button"
+                                  onClick={() => setActiveCameraField(f.field_name)}
+                                  className="flex flex-col items-center justify-center border-2 border-dashed border-violet-200 hover:border-violet-500 hover:bg-violet-500/5 py-6 rounded-2xl cursor-pointer transition text-center"
+                                >
+                                  <Camera className="h-6 w-6 text-violet-500 mb-1.5" />
+                                  <span className="block text-xs font-bold text-violet-650">Take Photo (Camera)</span>
+                                  <span className="block text-[9px] text-slate-400 mt-0.5">Directly capture using camera</span>
+                                </button>
+                                
+                                {/* Option 2: Upload File */}
+                                <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 hover:border-violet-500 hover:bg-violet-500/5 py-6 rounded-2xl cursor-pointer transition text-center">
+                                  <Upload className="h-6 w-6 text-slate-400 mb-1.5" />
+                                  <span className="block text-xs font-bold text-slate-650">Upload from Device</span>
+                                  <span className="block text-[9px] text-slate-400 mt-0.5">Select image from gallery/files</span>
+                                  <input
+                                    type="file"
+                                    required={f.is_required}
+                                    accept="image/*"
+                                    onChange={(e) => handleFileUpload(f.field_name, e, false)}
+                                    className="hidden"
+                                  />
+                                </label>
+                              </div>
+                            ) : (
+                              <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 hover:border-violet-500 hover:bg-violet-500/5 py-6 rounded-2xl cursor-pointer transition">
+                                <div className="text-center">
+                                  <Upload className="h-6 w-6 text-slate-400 mx-auto mb-1.5" />
+                                  <span className="block text-xs font-bold text-slate-600">Choose file or drag here</span>
+                                  <span className="block text-[9px] text-slate-400 mt-0.5">Images and PDF up to 10MB</span>
+                                </div>
+                                <input
+                                  type="file"
+                                  required={f.is_required}
+                                  accept={f.field_type === 'Single PDF Upload' ? '.pdf' : '*'}
+                                  onChange={(e) => handleFileUpload(f.field_name, e, false)}
+                                  className="hidden"
+                                />
+                              </label>
+                            )
                           )}
-                          <input
-                            type="file"
-                            required={f.is_required}
-                            accept={f.field_type === 'Single PDF Upload' ? '.pdf' : '*'}
-                            onChange={(e) => handleFileUpload(f.field_name, e, false)}
-                            className="hidden"
-                            disabled={isUploading}
-                          />
-                        </label>
+                        </div>
                       )}
                     </div>
                   )}
-
                   {/* 14. Multiple File uploads */}
                   {['Multiple Image Upload', 'Multiple PDF Upload'].includes(f.field_type) && (
-                    <div className="space-y-3">
-                      {value && Array.isArray(value) && value.length > 0 && (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                          {value.map((fileObj, fIdx) => (
-                            <div key={fileObj.url || fIdx} className="flex items-center justify-between bg-violet-50/40 border border-violet-100 p-2.5 rounded-xl">
-                              <span className="text-xs truncate max-w-[150px] font-semibold text-slate-700">{fileObj.originalname}</span>
-                              <button
-                                type="button"
-                                onClick={() => removeUploadedFile(f.field_name, fileObj.url, true)}
-                                className="p-1 hover:bg-rose-500 hover:text-white text-rose-500 rounded transition"
-                              >
-                                <X className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                    (() => {
+                      const labelLower = (f.label || '').toLowerCase();
+                      const fieldNameLower = (f.field_name || '').toLowerCase();
+                      const isAadharField = labelLower.includes('aadhar') || labelLower.includes('aadhaar') || fieldNameLower.includes('aadhar') || fieldNameLower.includes('aadhaar');
+                      const hasFiles = value && Array.isArray(value) && value.length > 0;
                       
-                      <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 hover:border-violet-500 hover:bg-violet-500/5 py-5 rounded-2xl cursor-pointer transition">
-                        {isUploading ? (
-                          <div className="text-center space-y-1">
-                            <Loader2 className="h-6 w-6 text-violet-600 animate-spin mx-auto" />
-                            <span className="text-[10px] text-slate-500">Uploading file... {progress}%</span>
-                          </div>
-                        ) : (
-                          <div className="text-center">
-                            <Upload className="h-5 w-5 text-slate-400 mx-auto mb-1" />
-                            <span className="block text-xs font-semibold text-slate-500">Upload additional file</span>
-                          </div>
-                        )}
-                        <input
-                          type="file"
-                          multiple
-                          onChange={(e) => handleFileUpload(f.field_name, e, true)}
-                          className="hidden"
-                          disabled={isUploading}
-                        />
-                      </label>
-                    </div>
+                      return (
+                        <div className="space-y-3">
+                          {hasFiles && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                              {value.map((fileObj, fIdx) => (
+                                <div key={fileObj.url || fIdx} className="flex items-center justify-between bg-violet-50/40 border border-violet-100 p-2.5 rounded-xl">
+                                  <span className="text-xs truncate max-w-[150px] font-semibold text-slate-700">{fileObj.originalname}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeUploadedFile(f.field_name, fileObj.url, true)}
+                                    className="p-1 hover:bg-rose-500 hover:text-white text-rose-500 rounded transition"
+                                  >
+                                    <X className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          
+                          {isAadharField && hasFiles && (
+                            <button
+                              type="button"
+                              onClick={() => triggerAadharExtraction(value)}
+                              disabled={ocrLoading}
+                              className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-750 hover:to-indigo-750 text-white rounded-2xl text-xs font-bold shadow-md hover:shadow-lg transition disabled:opacity-50"
+                            >
+                              <Sparkles className={`h-4 w-4 ${ocrLoading ? 'animate-spin' : 'animate-pulse'}`} />
+                              <span>{ocrLoading ? 'Extracting Details...' : 'Done & Extract Aadhaar Details'}</span>
+                            </button>
+                          )}
+                          
+                          <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 hover:border-violet-500 hover:bg-violet-500/5 py-5 rounded-2xl cursor-pointer transition">
+                            {isUploading ? (
+                              <div className="text-center space-y-1">
+                                <Loader2 className="h-6 w-6 text-violet-600 animate-spin mx-auto" />
+                                <span className="text-[10px] text-slate-500">Uploading file... {progress}%</span>
+                              </div>
+                            ) : (
+                              <div className="text-center">
+                                <Upload className="h-5 w-5 text-slate-400 mx-auto mb-1" />
+                                <span className="block text-xs font-semibold text-slate-500">Upload additional file</span>
+                              </div>
+                            )}
+                            <input
+                              type="file"
+                              multiple
+                              onChange={(e) => handleFileUpload(f.field_name, e, true)}
+                              className="hidden"
+                              disabled={isUploading}
+                            />
+                          </label>
+                        </div>
+                      );
+                    })()
                   )}
 
                   {/* 15. Signature Drawing Pad */}
@@ -843,6 +1392,117 @@ const ParticipantSubmit = () => {
           </form>
         </div>
       </div>
+
+      {/* CAMERA CAPTURE MODAL */}
+      {activeCameraField && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 shadow-2xl rounded-3xl w-full max-w-lg p-6 flex flex-col space-y-4 animate-in fade-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h4 className="text-base font-bold text-slate-800">Capture Photo</h4>
+                <p className="text-[10px] text-slate-450 mt-0.5 font-semibold">Capture documents, Aadhar card, or participant photo</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveCameraField(null)}
+                className="p-1.5 hover:bg-slate-100 text-slate-400 rounded-lg transition"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Error Message */}
+            {cameraError && (
+              <div className="p-3 bg-rose-50 border border-rose-100 text-rose-600 text-xs rounded-xl flex items-center font-semibold animate-pulse">
+                <AlertCircle className="h-4 w-4 mr-2 text-rose-500 shrink-0" />
+                <span>{cameraError}</span>
+              </div>
+            )}
+
+            {/* Warning Message */}
+            {cameraWarning && (
+              <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-xl flex items-start font-semibold">
+                <AlertCircle className="h-4 w-4 mr-2 text-amber-600 shrink-0 mt-0.5" />
+                <span>{cameraWarning}</span>
+              </div>
+            )}
+
+            {/* Camera / Preview Stream Box */}
+            <div className="relative rounded-2xl overflow-hidden bg-black aspect-video border border-slate-800 flex items-center justify-center shadow-inner">
+              {cameraLoading && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center space-y-2 bg-slate-950/80 z-10">
+                  <Loader2 className="h-8 w-8 text-violet-500 animate-spin" />
+                  <span className="text-[11px] text-slate-400 font-semibold">Initializing Camera stream...</span>
+                </div>
+              )}
+
+              {capturedImage ? (
+                <img src={capturedImage} alt="Captured" className="w-full h-full object-contain" />
+              ) : (
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  className="w-full h-full object-cover"
+                />
+              )}
+            </div>
+
+            {/* Camera Controls */}
+            <div className="flex items-center justify-between pt-2">
+              <button
+                type="button"
+                onClick={() => setActiveCameraField(null)}
+                className="px-4 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl transition"
+              >
+                Cancel
+              </button>
+
+              <div className="flex items-center space-x-2">
+                {!capturedImage ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setFacingMode(prev => prev === 'user' ? 'environment' : 'user')}
+                      className="px-3.5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-750 text-xs font-bold rounded-xl transition"
+                    >
+                      Switch Cam
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCapture}
+                      disabled={cameraLoading || !!cameraError}
+                      className="flex items-center space-x-1.5 bg-violet-650 hover:bg-violet-700 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-lg shadow-violet-600/10 active:scale-95 transition disabled:opacity-50"
+                    >
+                      <Camera className="h-4 w-4" />
+                      <span>Capture</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleRetry}
+                      className="px-4 py-2.5 bg-slate-105 hover:bg-slate-200 text-slate-750 text-xs font-bold rounded-xl transition"
+                    >
+                      Retry
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleUsePhoto}
+                      className="flex items-center space-x-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-lg shadow-emerald-650/10 active:scale-95 transition"
+                    >
+                      <Check className="h-4 w-4" />
+                      <span>Use Photo</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

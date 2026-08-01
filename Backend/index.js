@@ -11,19 +11,34 @@ const uploadRouter = require('./routes/upload');
 const analyticsRouter = require('./routes/analytics');
 const auditRouter = require('./routes/audit');
 
+const testTemplatesRouter = require('./routes/testTemplates');
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Enable CORS
 app.use(cors({
-  origin: [
-    'http://localhost:5173',
-    'http://localhost:5174',
-    'http://127.0.0.1:5173',
-    'http://127.0.0.1:5174',
-    "http://localhost:5174",
-    process.env.CLIENT_URL
-  ].filter(Boolean),
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      'http://localhost:5173',
+      'http://localhost:5174',
+      'http://localhost:5175',
+      'http://127.0.0.1:5173',
+      'http://127.0.0.1:5174',
+      'http://localhost:8081',
+      'http://127.0.0.1:8081',
+      process.env.CLIENT_URL
+    ].filter(Boolean);
+
+    const isLocalIp = /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$/.test(origin);
+    if (isLocalIp || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true
 }));
 
@@ -41,6 +56,7 @@ app.use('/api/registrations', registrationsRouter);
 app.use('/api/upload', uploadRouter);
 app.use('/api/analytics', analyticsRouter);
 app.use('/api/audit', auditRouter);
+app.use('/api/test-templates', testTemplatesRouter);
 
 // Basic health check route
 app.get('/health', (req, res) => {

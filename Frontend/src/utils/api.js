@@ -1,7 +1,16 @@
-const BASE_URL = 'http://127.0.0.1:5001/api';
+const getBackendUrl = () => {
+  const hostname = window.location.hostname;
+  if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1') {
+    return `http://${hostname}:5001`;
+  }
+  return 'http://localhost:5001';
+};
+
+const BACKEND_URL = getBackendUrl();
+const BASE_URL = `${BACKEND_URL}/api`;
 
 const api = {
-  BACKEND_URL: 'http://127.0.0.1:5001',
+  BACKEND_URL,
   getToken: () => localStorage.getItem('token'),
   setToken: (token) => localStorage.setItem('token', token),
   clearToken: () => localStorage.removeItem('token'),

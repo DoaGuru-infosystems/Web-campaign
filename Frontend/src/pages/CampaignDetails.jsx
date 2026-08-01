@@ -29,6 +29,9 @@ const CampaignDetails = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   
+  const loggedInUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const isAdmin = loggedInUser.role === 'Admin';
+  
   // Pagination & Filtering
   const [page, setPage] = useState(1);
   const [limit] = useState(10);
@@ -354,12 +357,14 @@ const CampaignDetails = () => {
             </div>
             
             <div className="flex items-center space-x-2 shrink-0">
-              <button
-                onClick={() => navigate(`/campaign/edit/${id}`)}
-                className="px-4.5 py-2.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold rounded-xl shadow-md shadow-violet-650/15 hover:shadow-violet-650/25 active:scale-95 transition"
-              >
-                Edit Form Builder
-              </button>
+              {isAdmin && (
+                <button
+                  onClick={() => navigate(`/campaign/edit/${id}`)}
+                  className="px-4.5 py-2.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold rounded-xl shadow-md shadow-violet-650/15 hover:shadow-violet-650/25 active:scale-95 transition"
+                >
+                  Edit Form Builder
+                </button>
+              )}
               <a
                 href={campaignPublicUrl}
                 target="_blank"
@@ -373,7 +378,7 @@ const CampaignDetails = () => {
           </div>
 
           {/* Campaign info cards (dates / limit) */}
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 pt-5 border-t border-slate-100">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-5 border-t border-slate-100">
             <div>
               <span className="block text-[11px] uppercase font-bold text-slate-400 tracking-wider">Start Date</span>
               <span className="text-sm font-bold text-slate-700">{campaign.start_date ? campaign.start_date.split('T')[0] : 'N/A'}</span>
@@ -388,6 +393,14 @@ const CampaignDetails = () => {
                 {campaign.submission_limit ? `${campaign.submission_limit} max` : 'Unlimited'}
               </span>
             </div>
+            {campaign.assigned_employee_name && (
+              <div>
+                <span className="block text-[11px] uppercase font-bold text-slate-400 tracking-wider">Assigned Staff</span>
+                <span className="text-xs font-extrabold text-violet-750 bg-violet-50/80 border border-violet-100 px-2 py-0.5 rounded-lg inline-block mt-0.5">
+                  {campaign.assigned_employee_name}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -729,9 +742,9 @@ const CampaignDetails = () => {
                             <span className="block text-[11px] text-slate-400 font-semibold">{f.label}</span>
                             
                             {/* If field is files/uploads */}
-                            {['Single Image Upload', 'Single PDF Upload', 'Signature Upload', 'File Upload'].includes(f.field_type) && value?.url ? (
+                            {['Single Image Upload', 'Single PDF Upload', 'Signature Upload', 'File Upload', 'Click Photo'].includes(f.field_type) && value?.url ? (
                               <div className="pt-1 flex items-center justify-between">
-                                {f.field_type === 'Single Image Upload' || f.field_type === 'Signature Upload' ? (
+                                {f.field_type === 'Single Image Upload' || f.field_type === 'Signature Upload' || f.field_type === 'Click Photo' ? (
                                   <div className="rounded-lg overflow-hidden border border-slate-200 max-h-16 w-24 bg-slate-900 flex items-center justify-center shrink-0">
                                     <img src={`${api.BACKEND_URL}${value.url}`} alt={f.label} className="object-contain w-full h-full" />
                                   </div>

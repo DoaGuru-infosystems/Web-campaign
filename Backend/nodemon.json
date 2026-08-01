@@ -1,0 +1,13 @@
+{
+  "watch": [
+    "."
+  ],
+  "ext": "js,json",
+  "ignore": [
+    "uploads",
+    "uploads/*",
+    "uploads/**",
+    "node_modules/*",
+    "eng.traineddata"
+  ]
+}

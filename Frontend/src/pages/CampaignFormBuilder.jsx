@@ -54,6 +54,7 @@ const fieldTypes = [
   'Aadhaar Number',
   'PAN Number',
   'File Upload',
+  'Click Photo',
   'URL',
   'Age',
   'Gender',
@@ -80,15 +81,43 @@ const CampaignFormBuilder = () => {
   const [category, setCategory] = useState('Health Camp');
   const [customCategory, setCustomCategory] = useState('');
   const [status, setStatus] = useState('Draft');
+  const [assignedEmployeeIds, setAssignedEmployeeIds] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const isAdmin = user.role === 'Admin';
+
+  useEffect(() => {
+    if (!isAdmin) {
+      navigate('/campaigns');
+    }
+  }, [isAdmin, navigate]);
   
   // Premium / Extra Settings
   const [submissionLimit, setSubmissionLimit] = useState('');
   const [thankYouMessage, setThankYouMessage] = useState('Thank you for registering! Your submission was recorded successfully.');
   const [regIdPrefix, setRegIdPrefix] = useState('CMP-2026');
+  const [testTemplateId, setTestTemplateId] = useState('');
+  const [templatesList, setTemplatesList] = useState([]);
 
   // Form Fields State
   const [fields, setFields] = useState([]);
   const [activeTab, setActiveTab] = useState('settings'); // 'settings' or 'fields'
+
+  // Fetch employees & test templates list
+  useEffect(() => {
+    const initData = async () => {
+      try {
+        const empRes = await api.get('/auth/employees');
+        setEmployees(empRes.employees || []);
+        
+        const templatesRes = await api.get('/test-templates');
+        setTemplatesList(templatesRes.templates || []);
+      } catch (err) {
+        console.error('Failed to fetch initial data:', err);
+      }
+    };
+    initData();
+  }, []);
 
   // Fetch campaign if in Edit Mode
   useEffect(() => {
@@ -112,9 +141,11 @@ const CampaignFormBuilder = () => {
             setCustomCategory(c.category);
           }
           setStatus(c.status);
+          setAssignedEmployeeIds(c.assigned_employee_ids || (c.assigned_employee_id ? [c.assigned_employee_id] : []));
           setSubmissionLimit(c.submission_limit || '');
           setThankYouMessage(c.thank_you_message || '');
           setRegIdPrefix(c.registration_id_prefix || 'CMP-2026');
+          setTestTemplateId(c.test_template_id ? String(c.test_template_id) : '');
           
           const loadedFields = (res.fields || []).map((f, idx) => ({
             ...f,
@@ -191,7 +222,7 @@ const CampaignFormBuilder = () => {
     const newField = {
       _key: `field_${Date.now()}_${Math.random()}`,
       field_name: `custom_field_${Date.now()}`,
-      label: 'Untitled Field',
+      label: '',
       field_type: 'Single Line Text',
       placeholder: '',
       description: '',
@@ -321,21 +352,37 @@ const CampaignFormBuilder = () => {
     setLoading(true);
     setError('');
 
-    const payload = {
-      title,
-      description,
-      banner_url: bannerUrl,
-      start_date: startDate,
-      end_date: endDate,
-      category: finalCategory,
-      status,
-      submission_limit: submissionLimit ? parseInt(submissionLimit) : null,
-      thank_you_message: thankYouMessage,
-      registration_id_prefix: regIdPrefix,
-      fields
-    };
-
     try {
+      // Sort fields so that Aadhaar-related fields are always at the top
+      const sortedFields = [...fields].filter(Boolean).sort((a, b) => {
+        const aLower = (a.label || '').toLowerCase();
+        const bLower = (b.label || '').toLowerCase();
+        const aIsAadhar = aLower.includes('aadhar') || aLower.includes('aadhaar') || a.field_type === 'Aadhaar Number';
+        const bIsAadhar = bLower.includes('aadhar') || bLower.includes('aadhaar') || b.field_type === 'Aadhaar Number';
+        if (aIsAadhar && !bIsAadhar) return -1;
+        if (!aIsAadhar && bIsAadhar) return 1;
+        return 0;
+      }).map((f, idx) => ({
+        ...f,
+        sort_order: idx
+      }));
+
+      const payload = {
+        title,
+        description,
+        banner_url: bannerUrl,
+        start_date: startDate,
+        end_date: endDate,
+        category: finalCategory,
+        status,
+        submission_limit: submissionLimit ? parseInt(submissionLimit) : null,
+        thank_you_message: thankYouMessage,
+        registration_id_prefix: regIdPrefix,
+        assigned_employee_ids: assignedEmployeeIds,
+        test_template_id: testTemplateId ? parseInt(testTemplateId) : null,
+        fields: sortedFields
+      };
+
       if (isEditMode) {
         await api.put(`/campaigns/${id}`, payload);
       } else {
@@ -414,7 +461,15 @@ const CampaignFormBuilder = () => {
             {fields.length === 0 ? (
               <p className="text-[10px] text-slate-400 italic text-center py-6">Your dynamic field widgets will appear here...</p>
             ) : (
-              fields.map((f, index) => {
+              [...fields].sort((a, b) => {
+                const aLower = (a.label || '').toLowerCase();
+                const bLower = (b.label || '').toLowerCase();
+                const aIsAadhar = aLower.includes('aadhar') || aLower.includes('aadhaar') || a.field_type === 'Aadhaar Number';
+                const bIsAadhar = bLower.includes('aadhar') || bLower.includes('aadhaar') || b.field_type === 'Aadhaar Number';
+                if (aIsAadhar && !bIsAadhar) return -1;
+                if (!aIsAadhar && bIsAadhar) return 1;
+                return 0;
+              }).map((f, index) => {
                 return (
                   <div key={index} className="space-y-1.5 text-left">
                     <label className="block text-[10px] font-bold text-slate-700">
@@ -550,7 +605,7 @@ const CampaignFormBuilder = () => {
                       </div>
                     )}
 
-                    {['Single Image Upload', 'Multiple Image Upload', 'Single PDF Upload', 'Multiple PDF Upload', 'File Upload'].includes(f.field_type) && (
+                    {['Single Image Upload', 'Multiple Image Upload', 'Single PDF Upload', 'Multiple PDF Upload', 'File Upload', 'Click Photo'].includes(f.field_type) && (
                       <div className="border border-dashed border-slate-200 rounded-xl p-3 text-center bg-slate-55">
                         <Upload className="h-4 w-4 mx-auto text-slate-400 mb-0.5" />
                         <span className="text-[9px] text-slate-405 block">{f.field_type}</span>
@@ -776,6 +831,57 @@ const CampaignFormBuilder = () => {
                         <option value="Closed">Closed</option>
                       </select>
                     </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Assign Employees</label>
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          const selectedId = parseInt(e.target.value);
+                          if (selectedId && !assignedEmployeeIds.includes(selectedId)) {
+                            setAssignedEmployeeIds([...assignedEmployeeIds, selectedId]);
+                          }
+                        }}
+                        className="w-full text-xs px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-800 focus:outline-none focus:border-violet-500 transition"
+                      >
+                        <option value="">-- Select Employee to Assign --</option>
+                        {employees
+                          .filter(emp => !assignedEmployeeIds.includes(emp.id))
+                          .map(emp => (
+                            <option key={emp.id} value={emp.id}>
+                              {emp.name} ({emp.email})
+                            </option>
+                          ))
+                        }
+                      </select>
+
+                      {assignedEmployeeIds.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-3">
+                          {assignedEmployeeIds.map(empId => {
+                            const emp = employees.find(e => e.id === empId);
+                            if (!emp) return null;
+                            return (
+                              <div 
+                                key={empId} 
+                                className="flex items-center space-x-1.5 bg-violet-50/70 border border-violet-100 px-3 py-1.5 rounded-xl text-xs text-violet-750 shadow-2xs hover:bg-violet-55 transition"
+                              >
+                                <span className="font-bold">{emp.name}</span>
+                                <span className="text-[10px] text-violet-400">({emp.email})</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAssignedEmployeeIds(assignedEmployeeIds.filter(id => id !== empId));
+                                  }}
+                                  className="text-violet-400 hover:text-rose-500 focus:outline-none ml-1 cursor-pointer transition font-bold"
+                                >
+                                  &times;
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -868,6 +974,20 @@ const CampaignFormBuilder = () => {
                         placeholder="Leave blank for unlimited"
                         className="w-full text-xs px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-800 focus:outline-none focus:border-violet-500 focus:bg-white transition"
                       />
+                    </div>
+
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Assign Diagnostic Test Template</label>
+                      <select
+                        value={testTemplateId}
+                        onChange={(e) => setTestTemplateId(e.target.value)}
+                        className="w-full text-xs px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-800 focus:outline-none focus:border-violet-500 focus:bg-white transition"
+                      >
+                        <option value="">None / Standard Vitals Form</option>
+                        {templatesList.map(t => (
+                          <option key={t.id} value={t.id}>{t.title}</option>
+                        ))}
+                      </select>
                     </div>
 
                     <div className="md:col-span-2">
@@ -1072,7 +1192,7 @@ const CampaignFormBuilder = () => {
                         )}
 
                         {/* File upload validation rules */}
-                        {['Single Image Upload', 'Multiple Image Upload', 'Single PDF Upload', 'Multiple PDF Upload', 'Signature Upload', 'File Upload'].includes(field.field_type) && (
+                        {['Single Image Upload', 'Multiple Image Upload', 'Single PDF Upload', 'Multiple PDF Upload', 'Signature Upload', 'File Upload', 'Click Photo'].includes(field.field_type) && (
                           <div className="flex items-center space-x-1.5">
                             <span className="text-[10px] font-bold text-slate-500">Max File Size:</span>
                             <select

@@ -10,12 +10,17 @@ import {
   Megaphone,
   UserCheck,
   Table2,
-  X
+  Users,
+  X,
+  ClipboardList
 } from 'lucide-react';
 import api from '../utils/api';
 
 const Sidebar = ({ adminName, isOpen, onClose }) => {
   const navigate = useNavigate();
+
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const isAdmin = user.role === 'Admin';
 
   const handleLogout = () => {
     api.clearToken();
@@ -24,12 +29,14 @@ const Sidebar = ({ adminName, isOpen, onClose }) => {
   };
 
   const navItems = [
-    { name: 'Dashboard',         path: '/',         icon: LayoutDashboard },
-    { name: 'Create Campaign',    path: '/campaign/create', icon: PlusCircle },
-    { name: 'View Campaigns',     path: '/campaigns', icon: Layers },
-    { name: 'All Entries',        path: '/entries',   icon: Table2 },
-    { name: 'Reports & Analytics',path: '/reports',   icon: BarChart3 },
-    { name: 'Settings',           path: '/settings',  icon: SettingsIcon },
+    { name: 'Dashboard',          path: '/',          icon: LayoutDashboard },
+    ...(isAdmin ? [{ name: 'Create Campaign',     path: '/campaign/create',  icon: PlusCircle }] : []),
+    { name: 'View Campaigns',      path: '/campaigns',  icon: Layers },
+    ...(isAdmin ? [{ name: 'Employees',           path: '/employees',        icon: Users }] : []),
+    ...(isAdmin ? [{ name: 'Test Templates',      path: '/test-templates',   icon: ClipboardList }] : []),
+    { name: 'All Entries',         path: '/entries',    icon: Table2 },
+    { name: 'Reports & Analytics', path: '/reports',    icon: BarChart3 },
+    { name: 'Settings',            path: '/settings',   icon: SettingsIcon },
   ];
 
   return (
@@ -39,9 +46,11 @@ const Sidebar = ({ adminName, isOpen, onClose }) => {
       {/* Brand Header */}
       <div className="px-4 py-4 border-b border-white/10 flex items-center justify-between">
         <div className="flex items-center space-x-2.5">
-          <div className="bg-violet-600 p-1.5 rounded-lg text-white shadow-md shadow-violet-600/10">
-            <Megaphone className="h-4 w-4" />
-          </div>
+          <img 
+            src="/applogo.jpeg" 
+            alt="CampaignFlow Logo" 
+            className="h-10 w-10 rounded-lg object-cover border border-slate-100 shadow-sm"
+          />
           <div>
             <h1 className="font-extrabold text-sm leading-tight tracking-tight text-slate-900">CampaignFlow</h1>
             <span className="text-[8px] text-violet-600 font-bold uppercase tracking-wider block">Enterprise CMS</span>
@@ -89,8 +98,8 @@ const Sidebar = ({ adminName, isOpen, onClose }) => {
               <UserCheck className="h-3.5 w-3.5" />
             </div>
             <div className="text-left overflow-hidden">
-              <p className="text-[11px] font-bold text-slate-800 truncate">{adminName || 'Admin User'}</p>
-              <p className="text-[8px] text-slate-400 font-bold uppercase tracking-wider">Administrator</p>
+              <p className="text-[11px] font-bold text-slate-800 truncate">{user.name || adminName || 'Admin User'}</p>
+              <p className="text-[8px] text-slate-400 font-bold uppercase tracking-wider">{user.role || 'Administrator'}</p>
             </div>
           </div>
         </div>
