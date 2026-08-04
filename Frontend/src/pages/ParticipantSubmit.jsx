@@ -14,7 +14,9 @@ import {
   Search,
   BookOpen,
   Camera,
-  Sparkles
+  Sparkles,
+  UserPlus,
+  ArrowLeft
 } from 'lucide-react';
 import api from '../utils/api';
 
@@ -167,6 +169,23 @@ const ParticipantSubmit = () => {
   const [submitSuccess, setSubmitSuccess] = useState(false);
   const [generatedRegId, setGeneratedRegId] = useState('');
   const [thankYouMessage, setThankYouMessage] = useState('');
+
+  // Dropdown for previous participants
+  const [previousParticipants, setPreviousParticipants] = useState([]);
+  const [participantSearchText, setParticipantSearchText] = useState('');
+  const [isParticipantDropdownOpen, setIsParticipantDropdownOpen] = useState(false);
+  const [selectedPatientId, setSelectedPatientId] = useState(null);
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsParticipantDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // OCR state for Aadhaar card parsing
   const [ocrLoading, setOcrLoading] = useState(false);
@@ -553,7 +572,22 @@ const ParticipantSubmit = () => {
       }
     };
     fetchPublicCampaign();
+
   }, [id]);
+
+  // Fetch participants when campaign id or submitSuccess state changes
+  useEffect(() => {
+    const fetchParticipants = async () => {
+      if (!api.getToken()) return;
+      try {
+        const data = await api.get(`/registrations/campaign/${id}?limit=1000`);
+        setPreviousParticipants(data.registrations || []);
+      } catch (err) {
+        console.error('Could not fetch participants for dropdown', err);
+      }
+    };
+    fetchParticipants();
+  }, [id, submitSuccess]);
 
   // Canvas Signature pad initializers
   useEffect(() => {
@@ -764,10 +798,17 @@ const ParticipantSubmit = () => {
     });
 
     try {
-      const res = await api.post('/registrations', {
-        campaign_id: id,
-        submitted_data: cleanData
-      });
+      let res;
+      if (selectedPatientId) {
+        res = await api.put(`/registrations/${selectedPatientId}`, {
+          submitted_data: cleanData
+        });
+      } else {
+        res = await api.post('/registrations', {
+          campaign_id: id,
+          submitted_data: cleanData
+        });
+      }
 
       setGeneratedRegId(res.registration_id);
       setThankYouMessage(res.thank_you_message);
@@ -851,26 +892,73 @@ const ParticipantSubmit = () => {
             Please copy or print your registration ticket. You can track your screening status using this ID.
           </div>
 
-          <div className="flex items-center space-x-3 w-full border-t border-slate-100 pt-5 print:hidden">
+          <div className="flex flex-col space-y-3 w-full border-t border-slate-100 pt-5 print:hidden">
             <button
-              onClick={() => navigate('/track')}
-              className="flex-1 px-4 py-3 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-bold transition"
+              onClick={() => {
+                setFormValues({});
+                setValidationErrors({});
+                setSubmitSuccess(false);
+                setGeneratedRegId('');
+                setParticipantSearchText('');
+                setSelectedPatientId(null);
+                window.scrollTo(0, 0);
+              }}
+              className="w-full flex items-center justify-center space-x-1.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold px-4 py-3 rounded-xl transition shadow-lg shadow-violet-600/20"
             >
-              Track Status
+              <UserPlus className="h-4 w-4" />
+              <span>Register New Patient</span>
             </button>
             <button
-              onClick={() => window.print()}
-              className="flex-1 flex items-center justify-center space-x-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold px-4 py-3 rounded-xl transition"
+              onClick={() => navigate(`/campaign/details/${id}`)}
+              className="w-full flex items-center justify-center space-x-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold px-4 py-3 rounded-xl transition"
             >
-              <Printer className="h-4 w-4" />
-              <span>Print Ticket</span>
+              <ArrowLeft className="h-4 w-4" />
+              <span>Back to Campaign Details</span>
             </button>
+            <div className="flex items-center space-x-3 w-full">
+              <button
+                onClick={() => navigate('/track')}
+                className="flex-1 px-4 py-3 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-bold transition"
+              >
+                Track Status
+              </button>
+              <button
+                onClick={() => window.print()}
+                className="flex-1 flex items-center justify-center space-x-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold px-4 py-3 rounded-xl transition"
+              >
+                <Printer className="h-4 w-4" />
+                <span>Print Ticket</span>
+              </button>
+            </div>
           </div>
 
         </div>
       </div>
     );
   }
+
+  const processedParticipants = previousParticipants.map(p => {
+    let nameStr = null;
+    if (p.submitted_data && typeof p.submitted_data === 'object') {
+      const nameField = fields.find(f => (f.label || '').toLowerCase().includes('name'));
+      if (nameField && p.submitted_data[nameField.field_name]) {
+        nameStr = p.submitted_data[nameField.field_name];
+      }
+      if (!nameStr) {
+        const keyMatch = Object.keys(p.submitted_data).find(key => key.toLowerCase().includes('name'));
+        if (keyMatch) nameStr = p.submitted_data[keyMatch];
+      }
+    }
+    nameStr = nameStr || p.registration_id;
+    return { 
+      ...p, 
+      rawName: nameStr,
+      displayName: `${nameStr} - ${p.registration_id} (${new Date(p.created_at).toLocaleDateString()})`, 
+      searchString: `${nameStr} ${p.registration_id}`.toLowerCase() 
+    };
+  });
+
+  const filteredParticipants = processedParticipants.filter(p => p.searchString.includes(participantSearchText.toLowerCase()));
 
   return (
     <div className="min-h-screen bg-slate-50/50 py-12 px-4 relative overflow-hidden font-sans flex items-center justify-center">
@@ -909,6 +997,85 @@ const ParticipantSubmit = () => {
           {campaign.description && (
             <div className="bg-white/40 border border-white/30 p-4.5 rounded-2xl text-xs text-slate-650 leading-relaxed">
               {campaign.description}
+            </div>
+          )}
+
+          {/* Previous Participants Dropdown */}
+          {previousParticipants.length > 0 && (
+            <div className="bg-white/40 border border-white/30 p-4 rounded-2xl mb-4 relative" ref={dropdownRef}>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                Autofill from Previous Patient
+              </label>
+              
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Search className="h-4 w-4 text-slate-400" />
+                </div>
+                <input
+                  type="text"
+                  placeholder="Search name or ID to autofill..."
+                  value={participantSearchText}
+                  onChange={(e) => {
+                    setParticipantSearchText(e.target.value);
+                    setIsParticipantDropdownOpen(true);
+                  }}
+                  onFocus={() => setIsParticipantDropdownOpen(true)}
+                  className="w-full bg-white border border-slate-200 text-slate-700 rounded-xl pl-10 pr-10 py-2.5 text-xs focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-all shadow-sm"
+                />
+                {participantSearchText && (
+                  <button 
+                    onClick={() => {
+                      setParticipantSearchText('');
+                      setIsParticipantDropdownOpen(false);
+                      setSelectedPatientId(null);
+                      // Reset form values if they clear it
+                      const defaults = {};
+                      fields.forEach(f => {
+                        if (f.field_type === 'Checkbox' || f.field_type === 'Multi Select') {
+                          defaults[f.field_name] = [];
+                        } else {
+                          defaults[f.field_name] = '';
+                        }
+                      });
+                      setFormValues(defaults);
+                    }}
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+
+              {isParticipantDropdownOpen && (
+                <div className="absolute z-50 mt-2 w-full bg-white border border-slate-200 rounded-xl shadow-xl max-h-60 overflow-y-auto left-0 origin-top animate-in fade-in zoom-in-95 duration-200">
+                  {filteredParticipants.length === 0 ? (
+                    <div className="p-4 text-xs text-slate-500 text-center">No patients found.</div>
+                  ) : (
+                    filteredParticipants.map(p => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className="w-full text-left px-4 py-3 hover:bg-slate-50 focus:bg-slate-50 border-b border-slate-100 last:border-0 transition-colors outline-none"
+                        onClick={() => {
+                          setParticipantSearchText(p.displayName);
+                          setIsParticipantDropdownOpen(false);
+                          setSelectedPatientId(p.id);
+                          
+                          if (p.submitted_data) {
+                            setFormValues(prev => ({
+                              ...prev,
+                              ...p.submitted_data
+                            }));
+                          }
+                        }}
+                      >
+                        <div className="text-xs font-bold text-slate-700">{p.rawName || p.registration_id}</div>
+                        <div className="text-[10px] text-slate-400 mt-0.5">{p.registration_id} • {new Date(p.created_at).toLocaleDateString()}</div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -1383,7 +1550,7 @@ const ParticipantSubmit = () => {
                 ) : (
                   <>
                     <CheckCircle className="h-5 w-5" />
-                    <span>Submit Form Registration</span>
+                    <span>{selectedPatientId ? 'Update Patient' : 'Register Patient'}</span>
                   </>
                 )}
               </button>

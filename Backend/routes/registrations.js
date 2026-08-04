@@ -188,6 +188,48 @@ router.post('/', async (req, res) => {
   }
 });
 
+// Update an existing Registration (Requires Auth)
+router.put('/:id', authMiddleware, async (req, res) => {
+  const { id } = req.params;
+  const { submitted_data } = req.body;
+
+  if (!submitted_data) {
+    return res.status(400).json({ error: 'Form data is required.' });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [regs] = await conn.query('SELECT * FROM registrations WHERE id = ? FOR UPDATE', [id]);
+    if (regs.length === 0) {
+      return res.status(404).json({ error: 'Registration not found.' });
+    }
+    const reg = regs[0];
+
+    const existingData = typeof reg.submitted_data === 'string' ? JSON.parse(reg.submitted_data) : (reg.submitted_data || {});
+    const newData = { ...existingData, ...submitted_data };
+
+    await conn.query('UPDATE registrations SET submitted_data = ? WHERE id = ?', [JSON.stringify(newData), id]);
+    
+    await conn.query(`
+      INSERT INTO notifications (type, message) 
+      VALUES ('Registration Updated', ?)
+    `, [`Registration ${reg.registration_id} was updated.`]);
+
+    await conn.commit();
+    res.status(200).json({
+      message: 'Registration updated successfully!',
+      registration_id: reg.registration_id
+    });
+  } catch (err) {
+    await conn.rollback();
+    console.error('Update error:', err);
+    res.status(500).json({ error: 'Failed to update registration.' });
+  } finally {
+    conn.release();
+  }
+});
+
 // 2. Track Registration Status (Public)
 router.get('/track/:regId', async (req, res) => {
   const { regId } = req.params;
