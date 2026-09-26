@@ -26,7 +26,11 @@ const authMiddleware = async (req, res, next) => {
     req.user = users[0];
     next();
   } catch (err) {
-    console.error('Auth verification error:', err);
+    if (err.name === 'TokenExpiredError') {
+      console.warn(`[Auth] Session token expired at ${err.expiredAt}`);
+      return res.status(401).json({ error: 'Session expired. Please login again.' });
+    }
+    console.error('Auth verification error:', err.message);
     return res.status(401).json({ error: 'Invalid or expired token.' });
   }
 };

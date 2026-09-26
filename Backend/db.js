@@ -1,12 +1,12 @@
-const mysql = require('mysql2/promise');
-const bcrypt = require('bcryptjs');
-require('dotenv').config();
+const mysql = require("mysql2/promise");
+const bcrypt = require("bcryptjs");
+require("dotenv").config();
 
 const pool = mysql.createPool({
-  host: process.env.DB_HOST || '127.0.0.1',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || 'Meer@9893676520',
-  database: process.env.DB_NAME || 'doctor_camp',
+  host: process.env.DB_HOST || "localhost",
+  user: process.env.DB_USER || "root",
+  password: process.env.DB_PASSWORD || "",
+  database: process.env.DB_NAME || "camp",
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
@@ -16,7 +16,9 @@ async function initDB() {
   let connection;
   try {
     connection = await pool.getConnection();
-    console.log('Connected to MySQL database: ' + (process.env.DB_NAME || 'doctor_camp'));
+    console.log(
+      "Connected to MySQL database: " + (process.env.DB_NAME || "doctor_camp"),
+    );
 
     // 1. Users Table
     await connection.query(`
@@ -52,23 +54,28 @@ async function initDB() {
     `);
 
     // Check and add assigned_employee_id to campaigns if not exists (for existing databases)
-    const [campaignCols] = await connection.query(`SHOW COLUMNS FROM campaigns LIKE 'assigned_employee_id'`);
+    const [campaignCols] = await connection.query(
+      `SHOW COLUMNS FROM campaigns LIKE 'assigned_employee_id'`,
+    );
     if (campaignCols.length === 0) {
-      await connection.query(`
+      await connection
+        .query(
+          `
         ALTER TABLE campaigns 
         ADD COLUMN assigned_employee_id INT DEFAULT NULL,
         ADD FOREIGN KEY (campaigns_ibfk_assigned_employee) REFERENCES users(id) ON DELETE SET NULL
-      `).catch(async () => {
-        // Fallback in case foreign key naming syntax varies
-        await connection.query(`
+      `,
+        )
+        .catch(async () => {
+          // Fallback in case foreign key naming syntax varies
+          await connection.query(`
           ALTER TABLE campaigns 
           ADD COLUMN assigned_employee_id INT DEFAULT NULL,
           ADD FOREIGN KEY (assigned_employee_id) REFERENCES users(id) ON DELETE SET NULL
         `);
-      });
-      console.log('Added assigned_employee_id column to campaigns table.');
+        });
+      console.log("Added assigned_employee_id column to campaigns table.");
     }
-
 
     // 3. Campaign Fields Table
     await connection.query(`
@@ -154,62 +161,83 @@ async function initDB() {
 
     // Check and create index on registrations(created_at) for pagination / listing order speedup
     try {
-      const [indexes] = await connection.query("SHOW INDEX FROM registrations WHERE Key_name = 'idx_registrations_created_at'");
+      const [indexes] = await connection.query(
+        "SHOW INDEX FROM registrations WHERE Key_name = 'idx_registrations_created_at'",
+      );
       if (indexes.length === 0) {
-        await connection.query("ALTER TABLE registrations ADD INDEX idx_registrations_created_at (created_at)");
-        console.log('Created index idx_registrations_created_at on registrations table.');
+        await connection.query(
+          "ALTER TABLE registrations ADD INDEX idx_registrations_created_at (created_at)",
+        );
+        console.log(
+          "Created index idx_registrations_created_at on registrations table.",
+        );
       }
     } catch (idxErr) {
-      console.error('Failed to create index on registrations:', idxErr);
+      console.error("Failed to create index on registrations:", idxErr);
     }
 
     // Check and create composite index on campaigns(status, end_date) for active campaigns dashboard metrics query
     try {
-      const [indexes] = await connection.query("SHOW INDEX FROM campaigns WHERE Key_name = 'idx_campaigns_status_end_date'");
+      const [indexes] = await connection.query(
+        "SHOW INDEX FROM campaigns WHERE Key_name = 'idx_campaigns_status_end_date'",
+      );
       if (indexes.length === 0) {
-        await connection.query("ALTER TABLE campaigns ADD INDEX idx_campaigns_status_end_date (status, end_date)");
-        console.log('Created index idx_campaigns_status_end_date on campaigns table.');
+        await connection.query(
+          "ALTER TABLE campaigns ADD INDEX idx_campaigns_status_end_date (status, end_date)",
+        );
+        console.log(
+          "Created index idx_campaigns_status_end_date on campaigns table.",
+        );
       }
     } catch (idxErr) {
-      console.error('Failed to create index on campaigns:', idxErr);
+      console.error("Failed to create index on campaigns:", idxErr);
     }
 
     // Check and add test_template_id to campaigns if not exists
     try {
-      const [campaignTestCols] = await connection.query("SHOW COLUMNS FROM campaigns LIKE 'test_template_id'");
+      const [campaignTestCols] = await connection.query(
+        "SHOW COLUMNS FROM campaigns LIKE 'test_template_id'",
+      );
       if (campaignTestCols.length === 0) {
         await connection.query(`
           ALTER TABLE campaigns 
           ADD COLUMN test_template_id INT DEFAULT NULL,
           ADD FOREIGN KEY (test_template_id) REFERENCES test_templates(id) ON DELETE SET NULL
         `);
-        console.log('Added test_template_id column to campaigns table.');
+        console.log("Added test_template_id column to campaigns table.");
       }
     } catch (colErr) {
-      console.error('Failed to add test_template_id column:', colErr);
+      console.error("Failed to add test_template_id column:", colErr);
     }
 
     // Check and add refer_to_hospital and travelling_by to patient_tests if not exists
     try {
-      const [referCols] = await connection.query("SHOW COLUMNS FROM patient_tests LIKE 'refer_to_hospital'");
+      const [referCols] = await connection.query(
+        "SHOW COLUMNS FROM patient_tests LIKE 'refer_to_hospital'",
+      );
       if (referCols.length === 0) {
         await connection.query(`
           ALTER TABLE patient_tests 
           ADD COLUMN refer_to_hospital VARCHAR(50) DEFAULT 'No'
         `);
-        console.log('Added refer_to_hospital column to patient_tests table.');
+        console.log("Added refer_to_hospital column to patient_tests table.");
       }
 
-      const [travelCols] = await connection.query("SHOW COLUMNS FROM patient_tests LIKE 'travelling_by'");
+      const [travelCols] = await connection.query(
+        "SHOW COLUMNS FROM patient_tests LIKE 'travelling_by'",
+      );
       if (travelCols.length === 0) {
         await connection.query(`
           ALTER TABLE patient_tests 
           ADD COLUMN travelling_by VARCHAR(255) DEFAULT 'None'
         `);
-        console.log('Added travelling_by column to patient_tests table.');
+        console.log("Added travelling_by column to patient_tests table.");
       }
     } catch (colErr) {
-      console.error('Failed to add referral/travel columns to patient_tests:', colErr);
+      console.error(
+        "Failed to add referral/travel columns to patient_tests:",
+        colErr,
+      );
     }
 
     // 8. Campaign Assignments Table (Multi-employee mapping)
@@ -226,7 +254,9 @@ async function initDB() {
 
     // Migrate existing single assignment data (assigned_employee_id) if the campaigns table has it
     try {
-      const [cols] = await connection.query("SHOW COLUMNS FROM campaigns LIKE 'assigned_employee_id'");
+      const [cols] = await connection.query(
+        "SHOW COLUMNS FROM campaigns LIKE 'assigned_employee_id'",
+      );
       if (cols.length > 0) {
         await connection.query(`
           INSERT IGNORE INTO campaign_assignments (campaign_id, user_id)
@@ -235,7 +265,7 @@ async function initDB() {
         `);
       }
     } catch (migErr) {
-      console.error('Migration of campaign_assignments warning:', migErr);
+      console.error("Migration of campaign_assignments warning:", migErr);
     }
 
     // 7. Audit Logs Table
@@ -252,19 +282,24 @@ async function initDB() {
     `);
 
     // Seed default Admin user if none exists
-    const [users] = await connection.query('SELECT * FROM users LIMIT 1');
+    const [users] = await connection.query("SELECT * FROM users LIMIT 1");
     if (users.length === 0) {
-      const hashedPassword = await bcrypt.hash('adminpassword', 10);
-      await connection.query(`
+      const hashedPassword = await bcrypt.hash("adminpassword", 10);
+      await connection.query(
+        `
         INSERT INTO users (name, email, password, role) 
         VALUES ('System Administrator', 'admin@campaignflow.com', ?, 'Admin')
-      `, [hashedPassword]);
-      console.log('Seeded default administrator: admin@campaignflow.com / adminpassword');
+      `,
+        [hashedPassword],
+      );
+      console.log(
+        "Seeded default administrator: admin@campaignflow.com / adminpassword",
+      );
     }
 
-    console.log('Database tables verified/created successfully.');
+    console.log("Database tables verified/created successfully.");
   } catch (err) {
-    console.error('Error initializing database tables:', err);
+    console.error("Error initializing database tables:", err);
     throw err;
   } finally {
     if (connection) connection.release();

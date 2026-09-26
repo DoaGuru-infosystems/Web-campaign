@@ -1,9 +1,11 @@
 const getBackendUrl = () => {
-  const hostname = window.location.hostname;
-  if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1') {
-    return `http://${hostname}:5001`;
+  // Support custom Vite environment variable if configured
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
   }
-  return 'http://localhost:5001';
+
+  // Live Backend URL
+  return 'https://camp.janjyotieyehospital.com';
 };
 
 const BACKEND_URL = getBackendUrl();

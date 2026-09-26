@@ -5,8 +5,8 @@ import api from '../utils/api';
 
 const Login = () => {
   const navigate = useNavigate();
-  const [email, setEmail] = useState('admin@campaignflow.com');
-  const [password, setPassword] = useState('adminpassword');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
