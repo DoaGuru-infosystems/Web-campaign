@@ -16,7 +16,8 @@ import {
   Camera,
   Sparkles,
   UserPlus,
-  ArrowLeft
+  ArrowLeft,
+  ArrowRight
 } from 'lucide-react';
 import api from '../utils/api';
 
@@ -195,6 +196,23 @@ const ParticipantSubmit = () => {
   const sigCanvasRefs = useRef({});
   const isDrawingRefs = useRef({});
 
+  // Check if field is Aadhaar Card
+  const isFieldAadhar = (fieldName) => {
+    if (!fieldName) return false;
+    const targetField = fields.find(f => f.field_name === fieldName);
+    const labelLower = (targetField?.label || '').toLowerCase();
+    const fieldNameLower = fieldName.toLowerCase();
+    const fieldTypeLower = (targetField?.field_type || '').toLowerCase();
+    return (
+      labelLower.includes('aadhar') || 
+      labelLower.includes('aadhaar') || 
+      fieldNameLower.includes('aadhar') || 
+      fieldNameLower.includes('aadhaar') ||
+      fieldTypeLower.includes('aadhar') ||
+      fieldTypeLower.includes('aadhaar')
+    );
+  };
+
   // Camera Modal States & Handlers
   const [activeCameraField, setActiveCameraField] = useState(null);
   const [cameraStream, setCameraStream] = useState(null);
@@ -206,12 +224,66 @@ const ParticipantSubmit = () => {
   const [facingMode, setFacingMode] = useState('environment'); // 'user' or 'environment'
   const videoRef = useRef(null);
 
+  // Aadhaar 2-Step Camera States: 'front' | 'front_preview' | 'back' | 'both_preview'
+  const [aadharCaptureStep, setAadharCaptureStep] = useState('front');
+  const [aadharFront, setAadharFront] = useState({ blob: null, previewUrl: '', warning: '', isExisting: false });
+  const [aadharBack, setAadharBack] = useState({ blob: null, previewUrl: '', warning: '' });
+
+  const openCamera = (fieldName) => {
+    const isAadhar = isFieldAadhar(fieldName);
+    if (isAadhar) {
+      const existingVals = Array.isArray(formValues[fieldName]) 
+        ? formValues[fieldName] 
+        : (formValues[fieldName] ? [formValues[fieldName]] : []);
+      
+      if (existingVals.length === 1) {
+        // Front already uploaded, open directly to capture Back side
+        setAadharCaptureStep('back');
+        setAadharFront({ 
+          blob: null, 
+          previewUrl: existingVals[0].url ? `${api.BACKEND_URL}${existingVals[0].url}` : '', 
+          warning: '', 
+          isExisting: true 
+        });
+        setAadharBack({ blob: null, previewUrl: '', warning: '' });
+      } else {
+        // Fresh 2-step capture
+        setAadharCaptureStep('front');
+        setAadharFront({ blob: null, previewUrl: '', warning: '', isExisting: false });
+        setAadharBack({ blob: null, previewUrl: '', warning: '' });
+      }
+    }
+    setActiveCameraField(fieldName);
+  };
+
+  const closeCameraModal = () => {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(track => track.stop());
+      setCameraStream(null);
+    }
+    if (capturedImage && capturedImage.startsWith('blob:')) {
+      URL.revokeObjectURL(capturedImage);
+    }
+    if (aadharFront.previewUrl && aadharFront.previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(aadharFront.previewUrl);
+    }
+    if (aadharBack.previewUrl && aadharBack.previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(aadharBack.previewUrl);
+    }
+    setCapturedImage(null);
+    setCapturedBlob(null);
+    setAadharFront({ blob: null, previewUrl: '', warning: '', isExisting: false });
+    setAadharBack({ blob: null, previewUrl: '', warning: '' });
+    setAadharCaptureStep('front');
+    setCameraError('');
+    setCameraWarning('');
+    setActiveCameraField(null);
+  };
+
   const startCamera = async () => {
     setCameraLoading(true);
     setCameraError('');
     setCameraWarning('');
-    setCapturedImage(null);
-    setCapturedBlob(null);
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setCameraError('Camera access is not supported on this browser or connection. Please use a secure (HTTPS) connection or upload a file instead.');
@@ -282,49 +354,99 @@ const ParticipantSubmit = () => {
     if (videoRef.current && cameraStream && !capturedImage) {
       videoRef.current.srcObject = cameraStream;
     }
-  }, [cameraStream, capturedImage]);
+  }, [cameraStream, capturedImage, aadharCaptureStep]);
 
   const handleCapture = () => {
-    if (videoRef.current) {
-      const video = videoRef.current;
-      const canvas = document.createElement('canvas');
-      
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
-      const ctx = canvas.getContext('2d');
-      
-      // High-quality rendering settings
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
-      
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      
-      canvas.toBlob(
-        (blob) => {
-          if (!blob) return;
-          const blobUrl = URL.createObjectURL(blob);
-          setCapturedImage(blobUrl);
-          setCapturedBlob(blob);
-          
-          // Run blur detection
-          const variance = detectBlur(canvas);
-          console.log('[Blur Detection] Laplacian Variance:', variance);
-          if (variance < 80) {
-            setCameraWarning('The captured photo appears to be blurry. For better OCR accuracy, please hold the camera steady and retake in a well-lit area.');
-          } else {
-            setCameraWarning('');
-          }
-        },
-        'image/jpeg',
-        1.0
-      );
-      
-      // Stop camera stream
-      if (cameraStream) {
-        cameraStream.getTracks().forEach(track => track.stop());
-        setCameraStream(null);
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    const canvas = document.createElement('canvas');
+    
+    let w = video.videoWidth || 1280;
+    let h = video.videoHeight || 720;
+    const maxDim = 1600;
+    if (w > maxDim || h > maxDim) {
+      if (w > h) {
+        h = Math.round((h * maxDim) / w);
+        w = maxDim;
+      } else {
+        w = Math.round((w * maxDim) / h);
+        h = maxDim;
       }
     }
+    
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    
+    // High-quality rendering settings
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(video, 0, 0, w, h);
+
+    // Stop camera stream while reviewing
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(track => track.stop());
+      setCameraStream(null);
+    }
+
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) return;
+        const blobUrl = URL.createObjectURL(blob);
+        
+        // Run blur detection
+        const variance = detectBlur(canvas);
+        const warning = variance < 80 
+          ? 'The photo appears slightly blurry. For optimal OCR accuracy, hold steady and ensure good lighting.' 
+          : '';
+
+        const isAadhar = isFieldAadhar(activeCameraField);
+
+        if (!isAadhar) {
+          setCapturedImage(blobUrl);
+          setCapturedBlob(blob);
+          setCameraWarning(warning);
+        } else {
+          if (aadharCaptureStep === 'front') {
+            setAadharFront({ blob, previewUrl: blobUrl, warning, isExisting: false });
+            setAadharCaptureStep('front_preview');
+            setCameraWarning(warning);
+          } else if (aadharCaptureStep === 'back') {
+            setAadharBack({ blob, previewUrl: blobUrl, warning });
+            setAadharCaptureStep('both_preview');
+            setCameraWarning(warning);
+          }
+        }
+      },
+      'image/jpeg',
+      0.85
+    );
+  };
+
+  const handleRetakeFront = () => {
+    if (aadharFront.previewUrl && aadharFront.previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(aadharFront.previewUrl);
+    }
+    setAadharFront({ blob: null, previewUrl: '', warning: '', isExisting: false });
+    setAadharCaptureStep('front');
+    setCameraWarning('');
+    startCamera();
+  };
+
+  const handleProceedToBack = () => {
+    setAadharCaptureStep('back');
+    setCameraWarning('');
+    startCamera();
+  };
+
+  const handleRetakeBack = () => {
+    if (aadharBack.previewUrl && aadharBack.previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(aadharBack.previewUrl);
+    }
+    setAadharBack({ blob: null, previewUrl: '', warning: '' });
+    setAadharCaptureStep('back');
+    setCameraWarning('');
+    startCamera();
   };
 
   const handleRetry = () => {
@@ -336,6 +458,7 @@ const ParticipantSubmit = () => {
       URL.revokeObjectURL(capturedImage);
     }
     setCapturedBlob(null);
+    setCapturedImage(null);
     setCameraWarning('');
     startCamera();
   };
@@ -371,11 +494,31 @@ const ParticipantSubmit = () => {
         const updated = { ...prev };
         
         fields.forEach(f => {
-          const fLabelLower = (f.label || '').toLowerCase();
-          const fNameLower = (f.field_name || '').toLowerCase();
+          const fLabelLower = (f.label || '').trim().toLowerCase();
+          const fNameLower = (f.field_name || '').trim().toLowerCase();
+          const fTypeLower = (f.field_type || '').trim().toLowerCase();
           
-          // 1. Aadhaar Number
-          if (fLabelLower.includes('aadhar') || fLabelLower.includes('aadhaar') || f.field_type === 'Aadhaar Number') {
+          // CRITICAL: Never overwrite photo, image, file upload or signature fields with text strings!
+          const isFileField = 
+            fTypeLower.includes('photo') || 
+            fTypeLower.includes('upload') || 
+            fTypeLower.includes('file') || 
+            fTypeLower.includes('image') || 
+            fTypeLower.includes('signature');
+          if (isFileField) return;
+
+          // 1. Aadhaar Number (only for text/number fields)
+          const isAadharNumField = 
+            fTypeLower.includes('aadhar') || 
+            fTypeLower.includes('aadhaar') || 
+            fLabelLower.includes('aadhar number') || 
+            fLabelLower.includes('aadhaar number') || 
+            fLabelLower.includes('uid') ||
+            fNameLower.includes('aadharnumber') || 
+            fNameLower.includes('aadhar_number') ||
+            ((fLabelLower.includes('aadhar') || fLabelLower.includes('aadhaar')) && !fLabelLower.includes('card') && !fLabelLower.includes('photo') && !fLabelLower.includes('upload'));
+
+          if (isAadharNumField) {
             if (details.aadharNumber) {
               updated[f.field_name] = details.aadharNumber;
             }
@@ -391,7 +534,8 @@ const ParticipantSubmit = () => {
             !fLabelLower.includes('doctor') &&
             !fLabelLower.includes('guardian') &&
             !fLabelLower.includes('nominee') &&
-            !fLabelLower.includes('witness')
+            !fLabelLower.includes('witness') &&
+            !fLabelLower.includes('campaign')
           ) {
             if (details.name) {
               updated[f.field_name] = details.name;
@@ -417,12 +561,12 @@ const ParticipantSubmit = () => {
             }
           }
           // 4. Gender
-          else if (fLabelLower.includes('gender') || fLabelLower.includes('sex') || fNameLower.includes('gender') || fNameLower.includes('sex')) {
+          else if (fLabelLower.includes('gender') || fLabelLower.includes('sex') || fNameLower.includes('gender') || fNameLower.includes('sex') || fTypeLower === 'gender') {
             if (details.gender) {
               const gLower = details.gender.toLowerCase();
-              if (gLower.includes('f')) {
+              if (gLower.includes('f') || gLower.includes('महिला') || gLower.includes('female')) {
                 updated[f.field_name] = 'Female';
-              } else if (gLower.includes('m')) {
+              } else if (gLower.includes('m') || gLower.includes('पुरुष') || gLower.includes('male')) {
                 updated[f.field_name] = 'Male';
               } else {
                 updated[f.field_name] = details.gender;
@@ -431,8 +575,9 @@ const ParticipantSubmit = () => {
           }
           // 5. Address
           else if (fLabelLower.includes('address') || fNameLower.includes('address')) {
-            if (details.address) {
-              updated[f.field_name] = details.address;
+            const addrVal = details.fullAddress || details.address;
+            if (addrVal) {
+              updated[f.field_name] = addrVal;
             }
           }
           // 6. City
@@ -472,11 +617,12 @@ const ParticipantSubmit = () => {
       setTimeout(() => setOcrMessage(''), 8000);
     }
   };
+
   const handleUsePhoto = async () => {
     if (!capturedBlob || !activeCameraField) return;
     
     const fieldName = activeCameraField;
-    setActiveCameraField(null);
+    closeCameraModal();
     
     setUploadingField(prev => ({ ...prev, [fieldName]: true }));
     setUploadProgress(prev => ({ ...prev, [fieldName]: 0 }));
@@ -487,26 +633,88 @@ const ParticipantSubmit = () => {
       const res = await api.upload(file, (percent) => {
         setUploadProgress(prev => ({ ...prev, [fieldName]: percent }));
       });
-      setFormValues(prev => ({ ...prev, [fieldName]: res }));
       
-      const targetField = fields.find(f => f.field_name === fieldName);
-      const labelLower = (targetField?.label || '').toLowerCase();
-      const fieldNameLower = fieldName.toLowerCase();
-      const fieldTypeLower = (targetField?.field_type || '').toLowerCase();
-      
-      const isAadharUpload = 
-        labelLower.includes('aadhar') || 
-        labelLower.includes('aadhaar') || 
-        fieldNameLower.includes('aadhar') || 
-        fieldNameLower.includes('aadhaar') ||
-        fieldTypeLower.includes('aadhar') ||
-        fieldTypeLower.includes('aadhaar');
+      const isAadharUpload = isFieldAadhar(fieldName);
+
+      let allAadharFiles = [];
+      setFormValues(prev => {
+        if (isAadharUpload) {
+          const existing = Array.isArray(prev[fieldName]) ? prev[fieldName] : (prev[fieldName] ? [prev[fieldName]] : []);
+          allAadharFiles = [...existing, res];
+          return { ...prev, [fieldName]: allAadharFiles };
+        }
+        return { ...prev, [fieldName]: res };
+      });
 
       if (isAadharUpload && res.filename) {
-        triggerAadharExtraction(res.filename, res.originalname);
+        triggerAadharExtraction(allAadharFiles.length > 1 ? allAadharFiles : res.filename, res.originalname);
       }
     } catch (err) {
       alert(err.message || 'Photo upload failed.');
+    } finally {
+      setUploadingField(prev => ({ ...prev, [fieldName]: false }));
+    }
+  };
+
+  const handleUseBothAadharPhotos = async (frontOnly = false) => {
+    if (!activeCameraField) return;
+    const fieldName = activeCameraField;
+    const frontBlob = aadharFront.blob;
+    const backBlob = aadharBack.blob;
+
+    if (!frontBlob && !aadharFront.isExisting) return;
+
+    closeCameraModal();
+
+    setUploadingField(prev => ({ ...prev, [fieldName]: true }));
+    setUploadProgress(prev => ({ ...prev, [fieldName]: 0 }));
+
+    try {
+      const uploadedFiles = [];
+
+      // 1. Upload Front side (if newly captured)
+      if (frontBlob) {
+        const frontFile = new File([frontBlob], `aadhar_front_${Date.now()}.jpg`, { type: 'image/jpeg' });
+        const frontRes = await api.upload(frontFile, (percent) => {
+          setUploadProgress(prev => ({ 
+            ...prev, 
+            [fieldName]: backBlob && !frontOnly ? Math.round(percent / 2) : percent 
+          }));
+        });
+        uploadedFiles.push(frontRes);
+      }
+
+      // 2. Upload Back side (if captured and not frontOnly)
+      if (backBlob && !frontOnly) {
+        const backFile = new File([backBlob], `aadhar_back_${Date.now()}.jpg`, { type: 'image/jpeg' });
+        const backRes = await api.upload(backFile, (percent) => {
+          setUploadProgress(prev => ({ 
+            ...prev, 
+            [fieldName]: 50 + Math.round(percent / 2) 
+          }));
+        });
+        uploadedFiles.push(backRes);
+      }
+
+      let allFiles = [];
+      setFormValues(prev => {
+        const existing = Array.isArray(prev[fieldName]) ? prev[fieldName] : (prev[fieldName] ? [prev[fieldName]] : []);
+        if (aadharFront.isExisting) {
+          allFiles = [...existing, ...uploadedFiles];
+        } else {
+          allFiles = uploadedFiles;
+        }
+        return { ...prev, [fieldName]: allFiles };
+      });
+
+      // 3. Trigger unified extraction with BOTH files in a SINGLE call!
+      if (allFiles.length > 0) {
+        await triggerAadharExtraction(allFiles);
+      } else if (uploadedFiles.length > 0) {
+        await triggerAadharExtraction(uploadedFiles);
+      }
+    } catch (err) {
+      alert(err.message || 'Failed to upload Aadhaar photos.');
     } finally {
       setUploadingField(prev => ({ ...prev, [fieldName]: false }));
     }
@@ -697,23 +905,35 @@ const ParticipantSubmit = () => {
       if (isMultiple) {
         const uploadedArr = Array.isArray(formValues[fieldName]) ? [...formValues[fieldName]] : [];
         for (let file of filesList) {
-          const fileToUpload = isAadharUpload ? file : await compressImage(file);
+          const fileToUpload = await compressImage(file);
           const res = await api.upload(fileToUpload, (percent) => {
             setUploadProgress(prev => ({ ...prev, [fieldName]: percent }));
           });
           uploadedArr.push(res);
         }
         setFormValues(prev => ({ ...prev, [fieldName]: uploadedArr }));
+        if (isAadharUpload && uploadedArr.length > 0) {
+          triggerAadharExtraction(uploadedArr);
+        }
       } else {
         const file = filesList[0];
-        const fileToUpload = isAadharUpload ? file : await compressImage(file);
+        const fileToUpload = await compressImage(file);
         const res = await api.upload(fileToUpload, (percent) => {
           setUploadProgress(prev => ({ ...prev, [fieldName]: percent }));
         });
-        setFormValues(prev => ({ ...prev, [fieldName]: res }));
+        
+        let allAadharFiles = [];
+        setFormValues(prev => {
+          if (isAadharUpload) {
+            const existing = Array.isArray(prev[fieldName]) ? prev[fieldName] : (prev[fieldName] ? [prev[fieldName]] : []);
+            allAadharFiles = [...existing, res];
+            return { ...prev, [fieldName]: allAadharFiles };
+          }
+          return { ...prev, [fieldName]: res };
+        });
 
         if (isAadharUpload && res.filename) {
-          triggerAadharExtraction(res.filename, res.originalname);
+          triggerAadharExtraction(allAadharFiles.length > 1 ? allAadharFiles : res.filename, res.originalname);
         }
       }
     } catch (err) {
@@ -1329,79 +1549,110 @@ const ParticipantSubmit = () => {
 
                   {/* 13. File & Document Upload fields */}
                   {['Single Image Upload', 'Single PDF Upload', 'File Upload', 'Click Photo'].includes(f.field_type) && (
-                    <div className="space-y-2">
-                      {value && value.url ? (
-                        <div className="flex items-center justify-between bg-violet-50/40 border border-violet-100 p-3 rounded-xl">
-                          <div className="flex items-center space-x-2">
-                            <FileText className="h-5 w-5 text-violet-500" />
-                            <div className="text-left">
-                              <span className="block text-[11px] font-bold text-slate-705 truncate max-w-[180px]">{value.originalname}</span>
-                              <span className="block text-[9px] text-slate-405">{(value.size / 1024).toFixed(1)} KB</span>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => removeUploadedFile(f.field_name, value.url, false)}
-                            className="p-1.5 bg-rose-500/10 hover:bg-rose-500 text-rose-500 hover:text-white rounded-lg transition"
-                          >
-                            <X className="h-4 w-4" />
-                          </button>
-                        </div>
-                      ) : (
-                        <div>
-                          {isUploading ? (
-                            <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 py-6 rounded-2xl bg-slate-50">
-                              <Loader2 className="h-6 w-6 text-violet-600 animate-spin mx-auto mb-2" />
-                              <span className="text-[10px] text-slate-500 font-semibold">Uploading: {progress}%</span>
-                            </div>
-                          ) : (
-                            f.field_type === 'Click Photo' ? (
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                {/* Option 1: Camera */}
-                                <button
-                                  type="button"
-                                  onClick={() => setActiveCameraField(f.field_name)}
-                                  className="flex flex-col items-center justify-center border-2 border-dashed border-violet-200 hover:border-violet-500 hover:bg-violet-500/5 py-6 rounded-2xl cursor-pointer transition text-center"
-                                >
-                                  <Camera className="h-6 w-6 text-violet-500 mb-1.5" />
-                                  <span className="block text-xs font-bold text-violet-650">Take Photo (Camera)</span>
-                                  <span className="block text-[9px] text-slate-400 mt-0.5">Directly capture using camera</span>
-                                </button>
-                                
-                                {/* Option 2: Upload File */}
-                                <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 hover:border-violet-500 hover:bg-violet-500/5 py-6 rounded-2xl cursor-pointer transition text-center">
-                                  <Upload className="h-6 w-6 text-slate-400 mb-1.5" />
-                                  <span className="block text-xs font-bold text-slate-650">Upload from Device</span>
-                                  <span className="block text-[9px] text-slate-400 mt-0.5">Select image from gallery/files</span>
-                                  <input
-                                    type="file"
-                                    required={f.is_required}
-                                    accept="image/*"
-                                    onChange={(e) => handleFileUpload(f.field_name, e, false)}
-                                    className="hidden"
-                                  />
-                                </label>
-                              </div>
-                            ) : (
-                              <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 hover:border-violet-500 hover:bg-violet-500/5 py-6 rounded-2xl cursor-pointer transition">
-                                <div className="text-center">
-                                  <Upload className="h-6 w-6 text-slate-400 mx-auto mb-1.5" />
-                                  <span className="block text-xs font-bold text-slate-600">Choose file or drag here</span>
-                                  <span className="block text-[9px] text-slate-400 mt-0.5">Images and PDF up to 10MB</span>
+                    (() => {
+                      const labelLower = (f.label || '').toLowerCase();
+                      const fieldNameLower = (f.field_name || '').toLowerCase();
+                      const fieldTypeLower = (f.field_type || '').toLowerCase();
+                      const isAadharField = labelLower.includes('aadhar') || labelLower.includes('aadhaar') || fieldNameLower.includes('aadhar') || fieldNameLower.includes('aadhaar') || fieldTypeLower.includes('aadhar') || fieldTypeLower.includes('aadhaar');
+                      
+                      const vals = Array.isArray(value) ? value : (value ? [value] : []);
+
+                      return (
+                        <div className="space-y-2">
+                          {vals.length > 0 && (
+                            <div className="space-y-2">
+                              {vals.map((v, idx) => (
+                                <div key={idx} className="flex items-center justify-between bg-violet-50/40 border border-violet-100 p-3 rounded-xl">
+                                  <div className="flex items-center space-x-2">
+                                    <FileText className="h-5 w-5 text-violet-500" />
+                                    <div className="text-left">
+                                      <span className="block text-[11px] font-bold text-slate-700 truncate max-w-[180px]">
+                                        {isAadharField ? `Aadhaar Side ${idx + 1} (${v.originalname})` : v.originalname}
+                                      </span>
+                                      <span className="block text-[9px] text-slate-400">{(v.size / 1024).toFixed(1)} KB</span>
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (isAadharField) {
+                                        const newVals = vals.filter((_, i) => i !== idx);
+                                        setFormValues(prev => ({ ...prev, [f.field_name]: newVals.length > 0 ? newVals : '' }));
+                                      } else {
+                                        removeUploadedFile(f.field_name, v.url, false);
+                                      }
+                                    }}
+                                    className="p-1.5 bg-rose-500/10 hover:bg-rose-500 text-rose-500 hover:text-white rounded-lg transition"
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </button>
                                 </div>
-                                <input
-                                  type="file"
-                                  required={f.is_required}
-                                  accept={f.field_type === 'Single PDF Upload' ? '.pdf' : '*'}
-                                  onChange={(e) => handleFileUpload(f.field_name, e, false)}
-                                  className="hidden"
-                                />
-                              </label>
-                            )
+                              ))}
+                            </div>
+                          )}
+
+                          {(!value || (isAadharField && vals.length < 2)) && (
+                            <div>
+                              {isUploading ? (
+                                <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 py-6 rounded-2xl bg-slate-50">
+                                  <Loader2 className="h-6 w-6 text-violet-600 animate-spin mx-auto mb-2" />
+                                  <span className="text-[10px] text-slate-500 font-semibold">Uploading: {progress}%</span>
+                                </div>
+                              ) : (
+                                f.field_type === 'Click Photo' ? (
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    {/* Option 1: Camera */}
+                                    <button
+                                      type="button"
+                                      onClick={() => openCamera(f.field_name)}
+                                      className="flex flex-col items-center justify-center border-2 border-dashed border-violet-200 hover:border-violet-500 hover:bg-violet-500/5 py-6 rounded-2xl cursor-pointer transition text-center"
+                                    >
+                                      <Camera className="h-6 w-6 text-violet-500 mb-1.5" />
+                                      <span className="block text-xs font-bold text-violet-600">
+                                        {isAadharField && vals.length === 1 ? 'Capture Back Side' : (isAadharField ? 'Scan Aadhaar (Front & Back)' : 'Take Photo (Camera)')}
+                                      </span>
+                                      <span className="block text-[9px] text-slate-400 mt-0.5">
+                                        {isAadharField ? '2-step capture: Front & Back together' : 'Directly capture using camera'}
+                                      </span>
+                                    </button>
+                                    
+                                    {/* Option 2: Upload File */}
+                                    <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 hover:border-violet-500 hover:bg-violet-500/5 py-6 rounded-2xl cursor-pointer transition text-center">
+                                      <Upload className="h-6 w-6 text-slate-400 mb-1.5" />
+                                      <span className="block text-xs font-bold text-slate-600">{isAadharField && vals.length === 1 ? 'Upload Back Side' : 'Upload from Device'}</span>
+                                      <span className="block text-[9px] text-slate-400 mt-0.5">Select image from gallery/files</span>
+                                      <input
+                                        type="file"
+                                        required={f.is_required && vals.length === 0}
+                                        accept="image/*"
+                                        multiple={isAadharField}
+                                        onChange={(e) => handleFileUpload(f.field_name, e, isAadharField)}
+                                        className="hidden"
+                                      />
+                                    </label>
+                                  </div>
+                                ) : (
+                                  <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 hover:border-violet-500 hover:bg-violet-500/5 py-6 rounded-2xl cursor-pointer transition">
+                                    <div className="text-center">
+                                      <Upload className="h-6 w-6 text-slate-400 mx-auto mb-1.5" />
+                                      <span className="block text-xs font-bold text-slate-600">Choose file or drag here</span>
+                                      <span className="block text-[9px] text-slate-400 mt-0.5">Images and PDF up to 10MB</span>
+                                    </div>
+                                    <input
+                                      type="file"
+                                      required={f.is_required && vals.length === 0}
+                                      accept={f.field_type === 'Single PDF Upload' ? '.pdf' : '*'}
+                                      onChange={(e) => handleFileUpload(f.field_name, e, false)}
+                                      className="hidden"
+                                    />
+                                  </label>
+                                )
+                              )}
+                            </div>
                           )}
                         </div>
-                      )}
-                    </div>
+                      );
+                    })()
                   )}
                   {/* 14. Multiple File uploads */}
                   {['Multiple Image Upload', 'Multiple PDF Upload'].includes(f.field_type) && (
@@ -1561,115 +1812,357 @@ const ParticipantSubmit = () => {
       </div>
 
       {/* CAMERA CAPTURE MODAL */}
-      {activeCameraField && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 shadow-2xl rounded-3xl w-full max-w-lg p-6 flex flex-col space-y-4 animate-in fade-in zoom-in-95 duration-200">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div>
-                <h4 className="text-base font-bold text-slate-800">Capture Photo</h4>
-                <p className="text-[10px] text-slate-450 mt-0.5 font-semibold">Capture documents, Aadhar card, or participant photo</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveCameraField(null)}
-                className="p-1.5 hover:bg-slate-100 text-slate-400 rounded-lg transition"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
+      {activeCameraField && (() => {
+        const isAadhar = isFieldAadhar(activeCameraField);
 
-            {/* Error Message */}
-            {cameraError && (
-              <div className="p-3 bg-rose-50 border border-rose-100 text-rose-600 text-xs rounded-xl flex items-center font-semibold animate-pulse">
-                <AlertCircle className="h-4 w-4 mr-2 text-rose-500 shrink-0" />
-                <span>{cameraError}</span>
+        return (
+          <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+            <div className="bg-white border border-slate-200 shadow-2xl rounded-3xl w-full max-w-xl p-5 sm:p-6 flex flex-col space-y-4 my-auto animate-in fade-in zoom-in-95 duration-200">
+              
+              {/* Modal Header */}
+              <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <span className={`p-1.5 rounded-lg ${isAadhar ? 'bg-violet-100 text-violet-600' : 'bg-slate-100 text-slate-700'}`}>
+                      <Camera className="h-4 w-4" />
+                    </span>
+                    <h4 className="text-base font-bold text-slate-800">
+                      {isAadhar ? 'Aadhaar Card Scanner' : 'Capture Photo'}
+                    </h4>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-1 font-medium">
+                    {isAadhar 
+                      ? (aadharCaptureStep === 'front' 
+                          ? 'Step 1 of 2: Capture Front Side (Name, DOB, Gender, Photo)' 
+                          : aadharCaptureStep === 'front_preview'
+                            ? 'Step 1 of 2: Review Front Side'
+                            : aadharCaptureStep === 'back'
+                              ? 'Step 2 of 2: Capture Back Side (Address & Pincode)'
+                              : 'Review Both Sides before Extracting')
+                      : 'Capture document or participant photo'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeCameraModal}
+                  className="p-1.5 hover:bg-slate-100 text-slate-400 rounded-lg transition"
+                >
+                  <X className="h-5 w-5" />
+                </button>
               </div>
-            )}
 
-            {/* Warning Message */}
-            {cameraWarning && (
-              <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-xl flex items-start font-semibold">
-                <AlertCircle className="h-4 w-4 mr-2 text-amber-600 shrink-0 mt-0.5" />
-                <span>{cameraWarning}</span>
-              </div>
-            )}
+              {/* Aadhaar Stepper Progress Indicator */}
+              {isAadhar && (
+                <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2 rounded-2xl border border-slate-100">
+                  <div className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-bold transition ${
+                    (aadharCaptureStep === 'front' || aadharCaptureStep === 'front_preview')
+                      ? 'bg-violet-600 text-white shadow-sm'
+                      : aadharFront.blob || aadharFront.isExisting
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : 'text-slate-400'
+                  }`}>
+                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${
+                      aadharFront.blob || aadharFront.isExisting ? 'bg-emerald-600 text-white' : 'bg-white/20'
+                    }`}>
+                      {aadharFront.blob || aadharFront.isExisting ? '✓' : '1'}
+                    </span>
+                    <span className="truncate">1. Front Side</span>
+                  </div>
 
-            {/* Camera / Preview Stream Box */}
-            <div className="relative rounded-2xl overflow-hidden bg-black aspect-video border border-slate-800 flex items-center justify-center shadow-inner">
-              {cameraLoading && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center space-y-2 bg-slate-950/80 z-10">
-                  <Loader2 className="h-8 w-8 text-violet-500 animate-spin" />
-                  <span className="text-[11px] text-slate-400 font-semibold">Initializing Camera stream...</span>
+                  <div className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-bold transition ${
+                    aadharCaptureStep === 'back'
+                      ? 'bg-violet-600 text-white shadow-sm'
+                      : aadharCaptureStep === 'both_preview'
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : 'text-slate-400'
+                  }`}>
+                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${
+                      aadharCaptureStep === 'both_preview' ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600'
+                    }`}>
+                      {aadharCaptureStep === 'both_preview' ? '✓' : '2'}
+                    </span>
+                    <span className="truncate">2. Back Side</span>
+                  </div>
                 </div>
               )}
 
-              {capturedImage ? (
-                <img src={capturedImage} alt="Captured" className="w-full h-full object-contain" />
-              ) : (
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  className="w-full h-full object-cover"
-                />
+              {/* Error Message */}
+              {cameraError && (
+                <div className="p-3 bg-rose-50 border border-rose-100 text-rose-600 text-xs rounded-xl flex items-center font-semibold">
+                  <AlertCircle className="h-4 w-4 mr-2 text-rose-500 shrink-0" />
+                  <span>{cameraError}</span>
+                </div>
               )}
-            </div>
 
-            {/* Camera Controls */}
-            <div className="flex items-center justify-between pt-2">
-              <button
-                type="button"
-                onClick={() => setActiveCameraField(null)}
-                className="px-4 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl transition"
-              >
-                Cancel
-              </button>
+              {/* Warning / Quality Message */}
+              {cameraWarning && (
+                <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-xl flex items-start font-semibold">
+                  <AlertCircle className="h-4 w-4 mr-2 text-amber-600 shrink-0 mt-0.5" />
+                  <span>{cameraWarning}</span>
+                </div>
+              )}
 
-              <div className="flex items-center space-x-2">
-                {!capturedImage ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => setFacingMode(prev => prev === 'user' ? 'environment' : 'user')}
-                      className="px-3.5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-750 text-xs font-bold rounded-xl transition"
-                    >
-                      Switch Cam
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleCapture}
-                      disabled={cameraLoading || !!cameraError}
-                      className="flex items-center space-x-1.5 bg-violet-650 hover:bg-violet-700 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-lg shadow-violet-600/10 active:scale-95 transition disabled:opacity-50"
-                    >
-                      <Camera className="h-4 w-4" />
-                      <span>Capture</span>
-                    </button>
-                  </>
+              {/* Main Content Area */}
+              {isAadhar && aadharCaptureStep === 'both_preview' ? (
+                /* Case 1: Both Sides Captured & Ready */
+                <div className="space-y-3">
+                  <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-2xl flex items-center justify-between text-xs text-indigo-950 font-bold">
+                    <span className="flex items-center">
+                      <Sparkles className="h-4 w-4 mr-1.5 text-indigo-600 shrink-0" />
+                      Both sides captured! Ready for combined autofill.
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {/* Front Side Card */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-2.5 flex flex-col space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-slate-700">1. Front Side (Name/DOB)</span>
+                        <button
+                          type="button"
+                          onClick={handleRetakeFront}
+                          className="text-[10px] font-bold text-violet-600 hover:text-violet-700 bg-white px-2 py-1 rounded-lg border border-slate-200 shadow-2xs hover:bg-slate-50 transition"
+                        >
+                          Retake
+                        </button>
+                      </div>
+                      <div className="aspect-[4/3] rounded-xl overflow-hidden bg-black border border-slate-300">
+                        {aadharFront.previewUrl ? (
+                          <img src={aadharFront.previewUrl} alt="Front" className="w-full h-full object-contain" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs font-semibold">
+                            Front Captured
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Back Side Card */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-2.5 flex flex-col space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-slate-700">2. Back Side (Address)</span>
+                        <button
+                          type="button"
+                          onClick={handleRetakeBack}
+                          className="text-[10px] font-bold text-violet-600 hover:text-violet-700 bg-white px-2 py-1 rounded-lg border border-slate-200 shadow-2xs hover:bg-slate-50 transition"
+                        >
+                          Retake
+                        </button>
+                      </div>
+                      <div className="aspect-[4/3] rounded-xl overflow-hidden bg-black border border-slate-300">
+                        {aadharBack.previewUrl ? (
+                          <img src={aadharBack.previewUrl} alt="Back" className="w-full h-full object-contain" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs font-semibold">
+                            Back Captured
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : isAadhar && aadharCaptureStep === 'front_preview' ? (
+                /* Case 2: Front Preview Mode */
+                <div className="space-y-3">
+                  <div className="relative rounded-2xl overflow-hidden bg-black aspect-video border border-slate-800 flex items-center justify-center shadow-inner">
+                    <img src={aadharFront.previewUrl} alt="Aadhaar Front" className="w-full h-full object-contain" />
+                    <div className="absolute top-3 left-3 bg-violet-600/90 backdrop-blur-sm text-white text-[10px] font-bold px-2.5 py-1 rounded-full shadow">
+                      ✓ Front Side Captured
+                    </div>
+                  </div>
+                  <div className="p-3 bg-violet-50/70 border border-violet-100 rounded-2xl flex items-center space-x-2 text-xs text-violet-800 font-medium">
+                    <Sparkles className="h-4 w-4 text-violet-600 shrink-0" />
+                    <span>Front side captured! Now click <b>"Next: Capture Back Side"</b> to scan address & pincode.</span>
+                  </div>
+                </div>
+              ) : (
+                /* Case 3: Live Video Stream */
+                <div className="relative rounded-2xl overflow-hidden bg-black aspect-video border border-slate-800 flex items-center justify-center shadow-inner">
+                  {cameraLoading && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center space-y-2 bg-slate-950/80 z-10">
+                      <Loader2 className="h-8 w-8 text-violet-500 animate-spin" />
+                      <span className="text-[11px] text-slate-400 font-semibold">Initializing Camera stream...</span>
+                    </div>
+                  )}
+
+                  {!isAadhar && capturedImage ? (
+                    <img src={capturedImage} alt="Captured" className="w-full h-full object-contain" />
+                  ) : (
+                    <>
+                      <video
+                        ref={videoRef}
+                        autoPlay
+                        playsInline
+                        className="w-full h-full object-cover"
+                      />
+                      {/* Aadhaar Alignment Guide Overlay */}
+                      {isAadhar && (
+                        <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-6">
+                          <div className="w-[90%] h-[80%] border-2 border-dashed border-white/70 rounded-2xl flex flex-col justify-between p-3 shadow-[0_0_0_9999px_rgba(0,0,0,0.25)]">
+                            <span className="text-[10px] font-bold text-white bg-black/60 backdrop-blur-xs px-2 py-0.5 rounded self-start">
+                              {aadharCaptureStep === 'back' ? 'Align Back Side (Address & Pincode)' : 'Align Front Side (Photo & Name)'}
+                            </span>
+                            <span className="text-[9px] text-white/80 bg-black/60 backdrop-blur-xs px-2 py-0.5 rounded self-center">
+                              Keep card flat and text clearly visible
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={closeCameraModal}
+                  className="px-4 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl transition"
+                >
+                  Cancel
+                </button>
+
+                {/* Aadhaar Flow Buttons */}
+                {isAadhar ? (
+                  <div className="flex items-center space-x-2">
+                    {aadharCaptureStep === 'front' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setFacingMode(prev => prev === 'user' ? 'environment' : 'user')}
+                          className="px-3.5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl transition"
+                        >
+                          Switch Cam
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleCapture}
+                          disabled={cameraLoading || !!cameraError}
+                          className="flex items-center space-x-1.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-lg shadow-violet-600/10 active:scale-95 transition disabled:opacity-50"
+                        >
+                          <Camera className="h-4 w-4" />
+                          <span>Capture Front Side</span>
+                        </button>
+                      </>
+                    )}
+
+                    {aadharCaptureStep === 'front_preview' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleRetakeFront}
+                          className="px-3.5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl transition"
+                        >
+                          Retake Front
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleUseBothAadharPhotos(true)}
+                          className="px-3 py-2.5 text-slate-500 hover:text-slate-800 text-xs font-semibold rounded-xl transition underline"
+                          title="Use front side only if back side is not available"
+                        >
+                          Front Only
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleProceedToBack}
+                          className="flex items-center space-x-1.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-lg shadow-violet-600/10 active:scale-95 transition"
+                        >
+                          <span>Next: Capture Back</span>
+                          <ArrowRight className="h-4 w-4" />
+                        </button>
+                      </>
+                    )}
+
+                    {aadharCaptureStep === 'back' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setAadharCaptureStep('front_preview')}
+                          className="px-3.5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl transition"
+                        >
+                          Back to Front
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFacingMode(prev => prev === 'user' ? 'environment' : 'user')}
+                          className="px-3.5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl transition"
+                        >
+                          Switch Cam
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleCapture}
+                          disabled={cameraLoading || !!cameraError}
+                          className="flex items-center space-x-1.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-lg shadow-violet-600/10 active:scale-95 transition disabled:opacity-50"
+                        >
+                          <Camera className="h-4 w-4" />
+                          <span>Capture Back Side</span>
+                        </button>
+                      </>
+                    )}
+
+                    {aadharCaptureStep === 'both_preview' && (
+                      <button
+                        type="button"
+                        onClick={() => handleUseBothAadharPhotos(false)}
+                        className="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-5 sm:px-6 py-2.5 rounded-xl shadow-lg shadow-emerald-600/10 active:scale-95 transition"
+                      >
+                        <Check className="h-4 w-4" />
+                        <span>Use Both Photos & Extract Details</span>
+                      </button>
+                    )}
+                  </div>
                 ) : (
-                  <>
-                    <button
-                      type="button"
-                      onClick={handleRetry}
-                      className="px-4 py-2.5 bg-slate-105 hover:bg-slate-200 text-slate-750 text-xs font-bold rounded-xl transition"
-                    >
-                      Retry
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleUsePhoto}
-                      className="flex items-center space-x-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-lg shadow-emerald-650/10 active:scale-95 transition"
-                    >
-                      <Check className="h-4 w-4" />
-                      <span>Use Photo</span>
-                    </button>
-                  </>
+                  /* Standard Non-Aadhaar Flow Buttons */
+                  <div className="flex items-center space-x-2">
+                    {!capturedImage ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setFacingMode(prev => prev === 'user' ? 'environment' : 'user')}
+                          className="px-3.5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl transition"
+                        >
+                          Switch Cam
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleCapture}
+                          disabled={cameraLoading || !!cameraError}
+                          className="flex items-center space-x-1.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-lg shadow-violet-600/10 active:scale-95 transition disabled:opacity-50"
+                        >
+                          <Camera className="h-4 w-4" />
+                          <span>Capture</span>
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleRetry}
+                          className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition"
+                        >
+                          Retry
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleUsePhoto}
+                          className="flex items-center space-x-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-lg shadow-emerald-600/10 active:scale-95 transition"
+                        >
+                          <Check className="h-4 w-4" />
+                          <span>Use Photo</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
+
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 };

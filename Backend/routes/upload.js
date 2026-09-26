@@ -37,7 +37,7 @@ const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
   limits: {
-    fileSize: 10 * 1024 * 1024 // Default maximum limit: 10MB
+    fileSize: 25 * 1024 * 1024 // Increased limit: 25MB
   }
 });
 
@@ -90,29 +90,39 @@ router.post('/extract-aadhar', async (req, res, next) => {
         }
       }
 
-      // Merge results
+      // Merge results with smart Front vs Back candidate classification
+      // Front side uniquely contains DOB / Gender
+      const frontCandidate = allResults.find(d => d.dob || d.gender) || allResults[0] || {};
+      // Back side uniquely contains Address / Pincode
+      const backCandidate = allResults.find(d => (d.address || d.pincode) && d !== frontCandidate) || 
+                            allResults.find(d => d.address || d.pincode) || 
+                            allResults[1] || {};
+
       const mergedDetails = {
-        name: '',
-        dob: '',
-        gender: '',
-        aadharNumber: '',
-        address: '',
-        city: '',
-        district: '',
-        state: '',
-        pincode: ''
+        name: frontCandidate.name || backCandidate.name || '',
+        dob: frontCandidate.dob || backCandidate.dob || '',
+        gender: frontCandidate.gender || backCandidate.gender || '',
+        aadharNumber: frontCandidate.aadharNumber || backCandidate.aadharNumber || '',
+        address: backCandidate.address || frontCandidate.address || '',
+        fullAddress: backCandidate.fullAddress || frontCandidate.fullAddress || backCandidate.address || frontCandidate.address || '',
+        city: backCandidate.city || frontCandidate.city || '',
+        district: backCandidate.district || frontCandidate.district || '',
+        state: backCandidate.state || frontCandidate.state || '',
+        pincode: backCandidate.pincode || frontCandidate.pincode || ''
       };
 
+      // Fallback: fill any missing fields from any candidate
       for (const details of allResults) {
-        if (details.name && !mergedDetails.name) mergedDetails.name = details.name;
-        if (details.dob && !mergedDetails.dob) mergedDetails.dob = details.dob;
-        if (details.gender && !mergedDetails.gender) mergedDetails.gender = details.gender;
-        if (details.aadharNumber && !mergedDetails.aadharNumber) mergedDetails.aadharNumber = details.aadharNumber;
-        if (details.address && !mergedDetails.address) mergedDetails.address = details.address;
-        if (details.city && !mergedDetails.city) mergedDetails.city = details.city;
-        if (details.district && !mergedDetails.district) mergedDetails.district = details.district;
-        if (details.state && !mergedDetails.state) mergedDetails.state = details.state;
-        if (details.pincode && !mergedDetails.pincode) mergedDetails.pincode = details.pincode;
+        if (!mergedDetails.name && details.name) mergedDetails.name = details.name;
+        if (!mergedDetails.dob && details.dob) mergedDetails.dob = details.dob;
+        if (!mergedDetails.gender && details.gender) mergedDetails.gender = details.gender;
+        if (!mergedDetails.aadharNumber && details.aadharNumber) mergedDetails.aadharNumber = details.aadharNumber;
+        if (!mergedDetails.address && details.address) mergedDetails.address = details.address;
+        if (!mergedDetails.fullAddress && details.fullAddress) mergedDetails.fullAddress = details.fullAddress;
+        if (!mergedDetails.city && details.city) mergedDetails.city = details.city;
+        if (!mergedDetails.district && details.district) mergedDetails.district = details.district;
+        if (!mergedDetails.state && details.state) mergedDetails.state = details.state;
+        if (!mergedDetails.pincode && details.pincode) mergedDetails.pincode = details.pincode;
       }
 
       return res.json({
